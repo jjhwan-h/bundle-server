@@ -105,40 +105,43 @@ func (cu *casbUsecase) setPolicies(c context.Context, data *Data) error {
 	if err != nil {
 		return handleErr("get t_policy_saas", err)
 	}
-	data.Policies = make([]Policy, len(policies))
 
-	for i, policy := range policies {
-		data.Policies[i].Priority = policy.Seq
-		data.Policies[i].PolicyID = policy.RuleID
-		data.Policies[i].PolicyName = policy.RuleName
-
-		enable, err := strconv.Atoi(policy.Enable)
-		if err != nil {
-			return handleErr("convert 'enable' value to int", err)
+	for _, policy := range policies {
+		// enable == 1인 경우에만 정책생성
+		if policy.Enable != "1" {
+			continue
 		}
-		code, err := convertCode(enable)
+
+		tmpPolicy := Policy{}
+
+		code, err := convertCode(int(policy.Action))
 		if err != nil {
 			return handleErr("convert 'enable' value to code", err)
 		}
-		data.Policies[i].Effect = code
 
-		err = cu.setSubject(c, data, policy, i)
+		tmpPolicy.Effect = code
+		tmpPolicy.Priority = policy.Seq
+		tmpPolicy.PolicyID = policy.RuleID
+		tmpPolicy.PolicyName = policy.RuleName
+
+		err = cu.setSubject(c, &tmpPolicy, policy)
 		if err != nil {
 			return err
 		}
 
-		err = cu.setServices(c, data, policy, i)
+		err = cu.setServices(c, &tmpPolicy, policy)
 		if err != nil {
 			return err
 		}
+		data.Policies = append(data.Policies, tmpPolicy)
 	}
 	return nil
 }
 
-func (cu *casbUsecase) setSubject(c context.Context, data *Data, policy policy.TPolicySaas, idx int) error {
-	data.Policies[idx].Subject = Subject{}
-	data.Policies[idx].Subject.Users = []string{}
-	data.Policies[idx].Subject.Groups = []string{}
+func (cu *casbUsecase) setSubject(c context.Context, data *Policy, policy policy.TPolicySaas) error {
+	data.Subject = Subject{}
+	data.Subject.Users = []string{}
+	data.Subject.Groups = []string{}
 
 	// [casb.t_profile_user_sub] gtype, gcode 조회
 	groupAttrs, err := cu.policySaasRepo.ListGroupAttrs(c, policy.RuleID)
@@ -150,7 +153,7 @@ func (cu *casbUsecase) setSubject(c context.Context, data *Data, policy policy.T
 	for _, groupAttr := range groupAttrs {
 		if groupAttr.GType == 2 {
 			// gypte이 2(user)인 경우 all gcode append
-			data.Policies[idx].Subject.Users = append(data.Policies[idx].Subject.Users, groupAttr.GCode)
+			data.Subject.Users = append(data.Subject.Users, groupAttr.GCode)
 		} else if groupAttr.GType == 1 {
 			groups = append(groups, groupAttr.GCode)
 		}
@@ -161,12 +164,12 @@ func (cu *casbUsecase) setSubject(c context.Context, data *Data, policy policy.T
 		return handleErr("query t_org_group", err)
 	}
 
-	data.Policies[idx].Subject.Groups = append(data.Policies[idx].Subject.Groups, gcodes...)
+	data.Subject.Groups = append(data.Subject.Groups, gcodes...)
 	return nil
 }
 
-func (cu *casbUsecase) setServices(c context.Context, data *Data, policy policy.TPolicySaas, idx int) error {
-	data.Policies[idx].Services = []category.CategoryService{}
+func (cu *casbUsecase) setServices(c context.Context, data *Policy, policy policy.TPolicySaas) error {
+	data.Services = []category.CategoryService{}
 
 	// [casb.t_policy_saas_cate_mapping] pid 조회
 	pids, err := cu.policySaasRepo.ListCatePids(c, policy.RuleID)
@@ -180,7 +183,7 @@ func (cu *casbUsecase) setServices(c context.Context, data *Data, policy policy.
 		return handleErr("query t_profile_saas_cate_sub, common.t_saas_category", err)
 	}
 
-	data.Policies[idx].Services = append(data.Policies[idx].Services, services...)
+	data.Services = append(data.Services, services...)
 	return nil
 }
 

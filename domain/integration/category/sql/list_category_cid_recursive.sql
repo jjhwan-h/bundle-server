@@ -18,7 +18,7 @@ CASE
  END AS action
 FROM (WITH RECURSIVE CTE AS ( 
                 SELECT DISTINCT 1 AS idx, cid,  pid  FROM common.t_saas_category 
-                WHERE cid IN (SELECT cid FROM common.t_profile_saas_cate_sub WHERE pid IN (?) AND `action` = '1')
+                WHERE cid IN (SELECT cid FROM common.t_profile_saas_cate_sub WHERE pid IN (?))
                 UNION ALL 
                 SELECT idx+1, P.cid, P.pid FROM common.t_saas_category P INNER JOIN CTE ON P.pid = CTE.cid AND CTE.idx < 20 
             ) 

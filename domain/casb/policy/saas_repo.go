@@ -30,7 +30,7 @@ func (sr *policySaasRepo) ListPolicies(c context.Context) ([]TPolicySaas, error)
 
 	err := sr.db.NewSelect().
 		Model(&Policies).
-		Column("rule_id", "rule_name", "seq", "enable").
+		Column("rule_id", "rule_name", "seq", "action", "enable").
 		Scan(c)
 
 	if err != nil {

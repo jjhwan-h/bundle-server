@@ -18,9 +18,6 @@ func New() (*gin.Engine, error) {
 
 	r.Use(ErrorMiddleware())
 
-	/*
-		DB update event receive handler
-	*/
 	r.Group("/data")
 	{
 		err := NewDataRouter(r, timeout)
