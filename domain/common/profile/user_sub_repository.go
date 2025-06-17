@@ -2,6 +2,8 @@ package profile
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 
 	appErr "bundle-server/internal/errors"
 
@@ -28,7 +30,11 @@ func (ur *profileUserSubRepo) ListGcodes(c context.Context, pid uint, gtype uint
 		Scan(c, &gcodes)
 
 	if err != nil {
-		return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, appErr.NewDBError(appErr.DB_NO_ROWS, "", err)
+		} else {
+			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		}
 	}
 
 	return gcodes, err

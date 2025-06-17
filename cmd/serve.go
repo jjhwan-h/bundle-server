@@ -41,6 +41,7 @@ var serveCmd = &cobra.Command{
 }
 
 func init() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	serveCmd.Flags().StringP("port", "p", "4001", "Number of port")
 	RootCmd.AddCommand(serveCmd)
 }

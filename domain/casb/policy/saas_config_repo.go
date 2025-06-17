@@ -3,6 +3,8 @@ package policy
 import (
 	appErr "bundle-server/internal/errors"
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/uptrace/bun"
 )
@@ -25,7 +27,11 @@ func (pr *policySaasConfigRepo) GetConfig(c context.Context) (*PolicySaasConfig,
 		Scan(c)
 
 	if err != nil {
-		return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, appErr.NewDBError(appErr.DB_NO_ROWS, "", err)
+		} else {
+			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		}
 	}
 
 	return config, err

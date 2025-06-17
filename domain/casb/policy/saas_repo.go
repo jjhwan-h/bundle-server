@@ -3,6 +3,8 @@ package policy
 import (
 	appErr "bundle-server/internal/errors"
 	"context"
+	"database/sql"
+	"errors"
 
 	_ "embed"
 
@@ -34,7 +36,11 @@ func (sr *policySaasRepo) ListPolicies(c context.Context) ([]TPolicySaas, error)
 		Scan(c)
 
 	if err != nil {
-		return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, appErr.NewDBError(appErr.DB_NO_ROWS, "", err)
+		} else {
+			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		}
 	}
 
 	return Policies, err
@@ -45,9 +51,12 @@ func (sr *policySaasRepo) ListGroupAttrs(c context.Context, ruleID uint) ([]Grou
 
 	err := sr.db.NewRaw(SQLListGroupAttrs, ruleID).Scan(c, &groupAttrs)
 	if err != nil {
-		return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, appErr.NewDBError(appErr.DB_NO_ROWS, "", err)
+		} else {
+			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		}
 	}
-
 	return groupAttrs, nil
 }
 
@@ -56,7 +65,11 @@ func (sr *policySaasRepo) ListCatePids(c context.Context, ruleID uint) ([]Pid, e
 
 	err := sr.db.NewRaw(SQLListCatePids, ruleID).Scan(c, &pids)
 	if err != nil {
-		return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, appErr.NewDBError(appErr.DB_NO_ROWS, "", err)
+		} else {
+			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		}
 	}
 
 	return pids, nil

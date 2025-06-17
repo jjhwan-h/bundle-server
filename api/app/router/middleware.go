@@ -25,9 +25,10 @@ func ErrorMiddleware() gin.HandlerFunc {
 
 		for _, err := range c.Errors {
 			if httpErr, ok := err.Err.(*appErr.HttpError); ok {
-				c.AbortWithStatusJSON(httpErr.Status, gin.H{
-					"error":   httpErr.Code,
-					"message": httpErr.Err.Error(),
+				c.AbortWithStatusJSON(httpErr.Status, appErr.HttpError{
+					Code:   httpErr.Code,
+					Err:    httpErr.Err,
+					Status: httpErr.Status,
 				})
 				return
 			}

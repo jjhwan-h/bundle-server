@@ -4,7 +4,9 @@ import (
 	"bundle-server/domain/casb/policy"
 	appErr "bundle-server/internal/errors"
 	"context"
+	"database/sql"
 	_ "embed"
+	"errors"
 
 	"github.com/uptrace/bun"
 )
@@ -30,7 +32,11 @@ func (cr *categoryRepo) ListCategorySummaries(c context.Context) ([]TCategorySum
 
 	err := cr.db.NewRaw(SQLListSummaries).Scan(c, &categories)
 	if err != nil {
-		return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, appErr.NewDBError(appErr.DB_NO_ROWS, "", err)
+		} else {
+			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		}
 	}
 
 	return categories, nil
@@ -41,7 +47,11 @@ func (cr *categoryRepo) ListCategoryServices(c context.Context, pidCates []polic
 
 	err := cr.db.NewRaw(SQLListCidsRecursive, bun.In(pidCates)).Scan(c, &cidDescendants)
 	if err != nil {
-		return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, appErr.NewDBError(appErr.DB_NO_ROWS, "", err)
+		} else {
+			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		}
 	}
 
 	return cidDescendants, nil

@@ -2,6 +2,8 @@ package org
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 
 	appErr "bundle-server/internal/errors"
 
@@ -28,7 +30,11 @@ func (gr *orgGroupRepo) ListGidsRecursive(c context.Context, rootGcodes []string
 
 	err := gr.db.NewRaw(SQLListGidsRecursive, bun.In(rootGcodes)).Scan(c, &pids)
 	if err != nil {
-		return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, appErr.NewDBError(appErr.DB_NO_ROWS, "", err)
+		} else {
+			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
+		}
 	}
 
 	return pids, nil

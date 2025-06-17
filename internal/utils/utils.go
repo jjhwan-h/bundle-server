@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -8,8 +9,8 @@ import (
 	"path/filepath"
 )
 
-func ToInterfaceSlice(strs []string) []interface{} {
-	args := make([]interface{}, len(strs))
+func ToInterfaceSlice(strs []string) []any {
+	args := make([]any, len(strs))
 	for i, s := range strs {
 		args[i] = s
 	}
@@ -44,4 +45,24 @@ func GetPath(p string) string {
 	}
 
 	return path.Join(baseDir, p)
+}
+
+func EncodeJson(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	err := enc.Encode(v)
+
+	return err
+}
+
+func StructToMap(v any) (map[string]any, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
