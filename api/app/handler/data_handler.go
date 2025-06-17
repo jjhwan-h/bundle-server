@@ -48,7 +48,7 @@ func (dh *DataHandler) BuildDataJson(c *gin.Context) {
 		err := buildDeltaBundle(data, dataPath, patchPath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				log.Println("initial build: data.json missing, proceeding to generate", err)
+				log.Println("delta bundle: data.json missing, proceeding to generate", err)
 			} else {
 				log.Println(err)
 				return
@@ -64,7 +64,7 @@ func (dh *DataHandler) BuildDataJson(c *gin.Context) {
 	go func(data *usecase.Data, dataPath string) {
 		err := buildBundle(data, dataPath)
 		if err != nil {
-			log.Println(err)
+			log.Println("regular bundle:", err)
 			return
 		}
 	}(data, dataPath)

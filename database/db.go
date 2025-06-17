@@ -27,7 +27,7 @@ const (
 )
 
 var (
-	dbMap = map[string]*bun.DB{}
+	dbMap = map[string]*bun.DB{} // 초기화 후 불변
 	once  sync.Once
 	err   error
 )
@@ -56,6 +56,7 @@ func Init(dbs []string) error {
 }
 
 func GetDB(dbName string) *bun.DB {
+	// 불변하므로 mutex 사용x
 	return dbMap[dbName]
 }
 
@@ -118,6 +119,11 @@ func dbConn(dbName string) (*bun.DB, error) {
 	}
 
 	db = bun.NewDB(sqldb, mysqldialect.New())
+
+	db.SetMaxOpenConns(20)                  // 최대 연결 수
+	db.SetMaxIdleConns(10)                  // Idle 커넥션 수
+	db.SetConnMaxLifetime(30 * time.Minute) // 연결 생명주기
+	db.SetConnMaxIdleTime(5 * time.Minute)  // Idle 커넥션 유지 시간
 
 	if pingErr := CheckConn(db); pingErr != nil {
 		return nil, pingErr
