@@ -8,4 +8,5 @@ var (
 	ErrEncodeData  = errors.New("failed to encoding data")
 	ErrSaveData    = errors.New("failed to save data")
 	ErrBuildBundle = errors.New("failed to build bundle")
+	ErrNoChanges   = errors.New("no changes detected")
 )

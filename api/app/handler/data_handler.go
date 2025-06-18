@@ -8,6 +8,7 @@ import (
 	"bundle-server/internal/utils"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +19,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gofrs/flock"
 	"github.com/spf13/viper"
 )
 
@@ -28,8 +31,23 @@ type DataHandler struct {
 }
 
 func (dh *DataHandler) BuildDataJson(c *gin.Context) {
-	dataPath := fmt.Sprintf("%s/sse/regular/data.json", viper.GetString("OPA_DATA_PATH"))
-	patchPath := fmt.Sprintf("%s/sse/delta/patch.json", viper.GetString("OPA_DATA_PATH"))
+	/* TODO: sse 서비스마다 path 또는 query로 서비스 명을 받아 저장 경로를 다르게 지정
+	예를들어, casb
+	 /var/lib/opa/sse/casb/data.json
+	 /var/lib/opa/sse/casb/patch.json
+	 /var/lib/opa/sse/casb/regular_bundle.tar.gz
+	 /var/lib/opa/sse/casb/delta_bundle.tar.gz
+
+	 ztna
+	 /var/lib/opa/sse/ztna/data.json
+	 /var/lib/opa/sse/ztna/patch.json
+	 /var/lib/opa/sse/ztna/regular_bundle.tar.gz
+	 /var/lib/opa/sse/ztna/delta_bundle.tar.gz
+
+	 ...
+	*/
+	dataPath := fmt.Sprintf("%s/data/%s_data.json", viper.GetString("OPA_DATA_PATH"), "casb")
+	patchPath := fmt.Sprintf("%s/data/%s_patch.json", viper.GetString("OPA_DATA_PATH"), "casb")
 
 	//data 빌드
 	data, err := dh.CasbUsecase.BuildDataJson(c)
@@ -43,40 +61,54 @@ func (dh *DataHandler) BuildDataJson(c *gin.Context) {
 		return
 	}
 
-	// delta-bundle 생성 및 알림
-	go func(data *usecase.Data, dataPath, patchPath string) {
-		err := buildDeltaBundle(data, dataPath, patchPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				log.Println("delta bundle: data.json missing, proceeding to generate", err)
+	// delta-bundle 생성
+	err = buildDeltaBundle(c, data, dataPath, patchPath)
+	if err != nil {
+		log.Println("delta bundle: ", err)
+		if !errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, appErr.ErrNoChanges) {
+				c.Error(appErr.NewHttpError(
+					"no_changes",
+					http.StatusOK,
+					err.Error(),
+				))
+				return
 			} else {
-				log.Println(err)
+				c.Error(appErr.NewHttpError(
+					"internal_server_error",
+					http.StatusInternalServerError,
+					err.Error(),
+				))
 				return
 			}
 		}
-
-		//opa-sdk-client에 알림
-
-	}(data, dataPath, patchPath)
+	}
 
 	// 일반-bundle 생성
 	// opa-sdk-client들 초기 실행 시 변경사항이 반영된 일반-bundle 필요
-	go func(data *usecase.Data, dataPath string) {
-		err := buildBundle(data, dataPath)
-		if err != nil {
-			log.Println("regular bundle:", err)
-			return
-		}
-	}(data, dataPath)
+	err = buildBundle(c, data, dataPath)
+	if err != nil {
+		log.Println("regular bundle: ", err)
+		c.Error(appErr.NewHttpError(
+			"internal_server_error",
+			http.StatusInternalServerError,
+			err.Error(),
+		))
+		return
+	}
+
+	// go func() {
+	// 	//opa-sdk-client에 알림
+	// }()
 
 	c.JSON(http.StatusAccepted, &httpResponse{
-		Code:    "BUILD_DATA_JSON",
-		Message: "data.json is being saved in the background",
+		Code:    "success",
+		Message: "data.json and bundle were generated successfully.",
 		Status:  http.StatusAccepted,
 	})
 }
 
-func buildDeltaBundle(data *usecase.Data, dataPath, patchPath string) error {
+func buildDeltaBundle(ctx context.Context, data *usecase.Data, dataPath, patchPath string) error {
 	byteOldData, err := os.ReadFile(dataPath)
 	if err != nil {
 		return fmt.Errorf("[ERROR] %s: %w", "failed to read data.json", err)
@@ -90,7 +122,7 @@ func buildDeltaBundle(data *usecase.Data, dataPath, patchPath string) error {
 	//patch.json 생성
 	patch, err := buildPatchJson(&oldData, data)
 	if err != nil {
-		return fmt.Errorf("[ERROR] failed to build patch.json: %w", err)
+		return fmt.Errorf("patch.json not generated: %w", err)
 	}
 	buf := new(bytes.Buffer)
 	err = utils.EncodeJson(buf, patch)
@@ -98,14 +130,15 @@ func buildDeltaBundle(data *usecase.Data, dataPath, patchPath string) error {
 		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrEncodeData.Error(), err)
 	}
 
-	if err := utils.SaveToFile(buf, patchPath); err != nil {
+	if err := utils.SaveToFile(ctx, buf, patchPath); err != nil {
 		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrSaveData.Error(), err)
 	}
 
 	//delta-bundle 생성
 	err = createBundle(
-		fmt.Sprintf("%s/sse/bundle/%s", viper.GetString("OPA_DATA_PATH"), "casb_delta.tar.gz"),
-		fmt.Sprintf("%s/sse/delta", viper.GetString("OPA_DATA_PATH")),
+		ctx,
+		fmt.Sprintf("%s/%s_delta.tar.gz", filepath.Dir(patchPath), "casb"), // TODO: 변경필요
+		filepath.Dir(patchPath),
 	)
 	if err != nil {
 		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrBuildBundle.Error(), err)
@@ -114,7 +147,7 @@ func buildDeltaBundle(data *usecase.Data, dataPath, patchPath string) error {
 	return nil
 }
 
-func buildBundle(data *usecase.Data, dataPath string) error {
+func buildBundle(ctx context.Context, data *usecase.Data, dataPath string) error {
 	//json형식으로 인코딩
 	buf := new(bytes.Buffer)
 	err := utils.EncodeJson(buf, data)
@@ -123,14 +156,15 @@ func buildBundle(data *usecase.Data, dataPath string) error {
 	}
 
 	//data.json 저장
-	if err := utils.SaveToFile(buf, dataPath); err != nil {
+	if err := utils.SaveToFile(ctx, buf, dataPath); err != nil {
 		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrSaveData.Error(), err)
 	}
 
 	//일반-bundle 생성
 	err = createBundle(
-		fmt.Sprintf("%s/sse/bundle/%s", viper.GetString("OPA_DATA_PATH"), "casb_regular.tar.gz"),
-		fmt.Sprintf("%s/sse/regular", viper.GetString("OPA_DATA_PATH")),
+		ctx,
+		fmt.Sprintf("%s/%s_regular.tar.gz", filepath.Dir(dataPath), "casb"), // TODO: 변경필요
+		filepath.Dir(dataPath),
 	)
 	if err != nil {
 		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrBuildBundle.Error(), err)
@@ -139,20 +173,31 @@ func buildBundle(data *usecase.Data, dataPath string) error {
 	return nil
 }
 
-func createBundle(tarGzPath, sourceDir string) error {
+func createBundle(ctx context.Context, tarGzPath, sourceDir string) error {
+	err := os.MkdirAll(filepath.Dir(tarGzPath), 0755)
+	if err != nil {
+		return err
+	}
+
+	lock := flock.New(tarGzPath + ".lock")
+	locked, err := lock.TryLockContext(ctx, time.Millisecond*500)
+	if err != nil {
+		return fmt.Errorf("failed to acquire lock: %w", err)
+	}
+	if !locked {
+		return fmt.Errorf("resource busy: tar file is locked")
+	}
+	defer lock.Unlock()
+
 	files, err := os.ReadDir(sourceDir)
 	if err != nil {
 		return fmt.Errorf("failed to read directory: %w", err)
 	}
 
-	err = os.MkdirAll(filepath.Dir(tarGzPath), 0755)
+	tmpPath := tarGzPath + ".tmp"
+	tarFile, err := os.Create(tmpPath)
 	if err != nil {
-		return err
-	}
-
-	tarFile, err := os.Create(tarGzPath)
-	if err != nil {
-		return fmt.Errorf("failed to create tar.gz: %w", err)
+		return fmt.Errorf("failed to create tmp tar.gz: %w", err)
 	}
 	defer tarFile.Close()
 
@@ -164,7 +209,7 @@ func createBundle(tarGzPath, sourceDir string) error {
 
 	for _, file := range files {
 		if file.IsDir() {
-			continue // 디렉토리는 무시 (필요 없음)
+			continue
 		}
 		filePath := filepath.Join(sourceDir, file.Name())
 
@@ -172,12 +217,13 @@ func createBundle(tarGzPath, sourceDir string) error {
 		if err != nil {
 			return err
 		}
+
 		header, err := tar.FileInfoHeader(info, file.Name())
 		if err != nil {
 			return err
 		}
-
 		header.Name = file.Name()
+
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return err
 		}
@@ -186,20 +232,20 @@ func createBundle(tarGzPath, sourceDir string) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
-
-		if _, err := io.Copy(tarWriter, f); err != nil {
+		_, err = io.Copy(tarWriter, f)
+		f.Close()
+		if err != nil {
 			return err
 		}
 	}
 
-	return nil
+	return os.Rename(tmpPath, tarGzPath)
 }
 
 func buildPatchJson(oldData *usecase.Data, data *usecase.Data) (*patch, error) {
 	patchData := getChanges(oldData, data)
 	if len(patchData) == 0 {
-		return nil, fmt.Errorf("no changes to generate patch")
+		return nil, appErr.ErrNoChanges
 	}
 	return &patch{
 		Data: patchData,

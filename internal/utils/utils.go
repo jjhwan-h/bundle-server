@@ -1,12 +1,16 @@
 package utils
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"time"
+
+	"github.com/gofrs/flock"
 )
 
 func ToInterfaceSlice(strs []string) []any {
@@ -18,7 +22,7 @@ func ToInterfaceSlice(strs []string) []any {
 	return args
 }
 
-func SaveToFile(reader io.Reader, path string) error {
+func SaveToFile(ctx context.Context, reader io.Reader, path string) error {
 	if reader == nil {
 		return fmt.Errorf("reader parameter is nil")
 	}
@@ -28,14 +32,32 @@ func SaveToFile(reader io.Reader, path string) error {
 		return err
 	}
 
-	dst, err := os.Create(path)
+	lockPath := path + ".lock"
+	fileLock := flock.New(lockPath) // 멀티 프로세스/컨테이너 환경에서의 쓰기 충돌 방지
+
+	locked, err := fileLock.TryLockContext(ctx, time.Millisecond*500)
+	if err != nil {
+		return fmt.Errorf("failed to acuire lock: %w", err)
+	}
+	if !locked {
+		return fmt.Errorf("timeout: could not acquire file lock")
+	}
+	defer fileLock.Unlock()
+
+	tmpPath := path + ".tmp"
+	dst, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
 
-	_, err = io.Copy(dst, reader)
-	return err
+	if _, err = io.Copy(dst, reader); err != nil {
+		dst.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	dst.Close()
+
+	return os.Rename(tmpPath, path) // atomic write
 }
 
 func GetPath(p string) string {
