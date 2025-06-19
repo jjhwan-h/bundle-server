@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -112,7 +111,6 @@ func dbConn(dbName string) (*bun.DB, error) {
 		readTimeout,
 		writeTimeout,
 	)
-	log.Println(dsn)
 	sqldb, openErr := sql.Open("mysql", dsn)
 	if openErr != nil {
 		return nil, err
@@ -120,8 +118,8 @@ func dbConn(dbName string) (*bun.DB, error) {
 
 	db = bun.NewDB(sqldb, mysqldialect.New())
 
-	db.SetMaxOpenConns(20)                  // 최대 연결 수
-	db.SetMaxIdleConns(10)                  // Idle 커넥션 수
+	db.SetMaxOpenConns(10)                  // 최대 연결 수
+	db.SetMaxIdleConns(5)                   // Idle 커넥션 수
 	db.SetConnMaxLifetime(30 * time.Minute) // 연결 생명주기
 	db.SetConnMaxIdleTime(5 * time.Minute)  // Idle 커넥션 유지 시간
 

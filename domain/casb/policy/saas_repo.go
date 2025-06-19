@@ -42,7 +42,6 @@ func (sr *policySaasRepo) ListPolicies(c context.Context) ([]TPolicySaas, error)
 			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
 		}
 	}
-
 	return Policies, err
 }
 
@@ -71,6 +70,5 @@ func (sr *policySaasRepo) ListCatePids(c context.Context, ruleID uint) ([]Pid, e
 			return nil, appErr.NewDBError(appErr.DB_QUERY_FAIL, "", err)
 		}
 	}
-
 	return pids, nil
 }

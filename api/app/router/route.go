@@ -1,26 +1,33 @@
 package router
 
 import (
+	"bundle-server/pkg/middleware"
 	"fmt"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 const (
 	contextTime = 3
 )
 
-func New() (*gin.Engine, error) {
-	r := gin.Default()
+func New(logger *zap.Logger) (*gin.Engine, error) {
+	r := gin.New()
 
 	timeout := time.Duration(contextTime) * time.Second
 
-	r.Use(ErrorMiddleware())
+	r.Use(gin.Recovery())
+	if gin.Mode() == gin.ReleaseMode {
+		r.Use(middleware.Logger(logger))
+		r.Use(middleware.Security())
+	}
+	r.Use(middleware.ErrorMiddleware())
 
 	r.Group("/data")
 	{
-		err := NewDataRouter(r, timeout)
+		err := NewDataRouter(r, logger, timeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize data router: %w", err)
 		}

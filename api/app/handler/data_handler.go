@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,10 +23,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gofrs/flock"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
 type DataHandler struct {
 	CasbUsecase usecase.CasbUsecase
+	*zap.Logger
 }
 
 func (dh *DataHandler) BuildDataJson(c *gin.Context) {
@@ -46,13 +47,14 @@ func (dh *DataHandler) BuildDataJson(c *gin.Context) {
 
 	 ...
 	*/
-	dataPath := fmt.Sprintf("%s/data/%s_data.json", viper.GetString("OPA_DATA_PATH"), "casb")
-	patchPath := fmt.Sprintf("%s/data/%s_patch.json", viper.GetString("OPA_DATA_PATH"), "casb")
+	service := "casb"
+	dataPath := fmt.Sprintf("%s/data/%s_data.json", viper.GetString("OPA_DATA_PATH"), service)
+	patchPath := fmt.Sprintf("%s/data/%s_patch.json", viper.GetString("OPA_DATA_PATH"), service)
 
 	//data 빌드
 	data, err := dh.CasbUsecase.BuildDataJson(c)
 	if err != nil {
-		log.Printf("[ERROR] %s: %v\n", appErr.ErrBuildData.Error(), err)
+		dh.Error(appErr.ErrBuildData.Error(), zap.Error(err))
 		c.Error(appErr.NewHttpError(
 			"internal_server_error",
 			http.StatusInternalServerError,
@@ -64,16 +66,18 @@ func (dh *DataHandler) BuildDataJson(c *gin.Context) {
 	// delta-bundle 생성
 	err = buildDeltaBundle(c, data, dataPath, patchPath)
 	if err != nil {
-		log.Println("delta bundle: ", err)
 		if !errors.Is(err, os.ErrNotExist) {
-			if errors.Is(err, appErr.ErrNoChanges) {
-				c.Error(appErr.NewHttpError(
-					"no_changes",
-					http.StatusOK,
-					err.Error(),
-				))
+			if errors.Is(err, appErr.ErrNoChanges) { // data.json 변경 x
+				dh.Info("patch.json not generated: no changes detected", zap.String("patch", patchPath))
+				c.JSON(http.StatusOK,
+					&httpResponse{
+						Code:    "no_changes",
+						Message: err.Error(),
+						Status:  http.StatusOK,
+					})
 				return
 			} else {
+				dh.Error("failed to build delta bundle", zap.Error(err))
 				c.Error(appErr.NewHttpError(
 					"internal_server_error",
 					http.StatusInternalServerError,
@@ -81,20 +85,26 @@ func (dh *DataHandler) BuildDataJson(c *gin.Context) {
 				))
 				return
 			}
+		} else {
+			dh.Info("No existing data.json found. Skipping delta bundle generation", zap.String("data", dataPath))
 		}
+	} else {
+		dh.Info("Delta Bundle created successfully", zap.String("bundle", service))
 	}
 
 	// 일반-bundle 생성
 	// opa-sdk-client들 초기 실행 시 변경사항이 반영된 일반-bundle 필요
 	err = buildBundle(c, data, dataPath)
 	if err != nil {
-		log.Println("regular bundle: ", err)
+		dh.Error("failed to build regular bundle", zap.Error(err))
 		c.Error(appErr.NewHttpError(
 			"internal_server_error",
 			http.StatusInternalServerError,
 			err.Error(),
 		))
 		return
+	} else {
+		dh.Info("Regular Bundle created successfully", zap.String("bundle", service))
 	}
 
 	// go func() {
@@ -111,12 +121,12 @@ func (dh *DataHandler) BuildDataJson(c *gin.Context) {
 func buildDeltaBundle(ctx context.Context, data *usecase.Data, dataPath, patchPath string) error {
 	byteOldData, err := os.ReadFile(dataPath)
 	if err != nil {
-		return fmt.Errorf("[ERROR] %s: %w", "failed to read data.json", err)
+		return fmt.Errorf("%s: %w", "failed to read data.json", err)
 	}
 
 	var oldData usecase.Data
 	if err := json.Unmarshal(byteOldData, &oldData); err != nil {
-		return fmt.Errorf("[ERROR] %s: %w", "failed to unmarshal data to map", err)
+		return fmt.Errorf("%s: %w", "failed to unmarshal data to map", err)
 	}
 
 	//patch.json 생성
@@ -127,11 +137,11 @@ func buildDeltaBundle(ctx context.Context, data *usecase.Data, dataPath, patchPa
 	buf := new(bytes.Buffer)
 	err = utils.EncodeJson(buf, patch)
 	if err != nil {
-		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrEncodeData.Error(), err)
+		return fmt.Errorf("%s: %w", appErr.ErrEncodeData.Error(), err)
 	}
 
 	if err := utils.SaveToFile(ctx, buf, patchPath); err != nil {
-		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrSaveData.Error(), err)
+		return fmt.Errorf("%s: %w", appErr.ErrSaveData.Error(), err)
 	}
 
 	//delta-bundle 생성
@@ -141,7 +151,7 @@ func buildDeltaBundle(ctx context.Context, data *usecase.Data, dataPath, patchPa
 		filepath.Dir(patchPath),
 	)
 	if err != nil {
-		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrBuildBundle.Error(), err)
+		return fmt.Errorf("%s: %w", appErr.ErrBuildBundle.Error(), err)
 	}
 
 	return nil
@@ -152,12 +162,14 @@ func buildBundle(ctx context.Context, data *usecase.Data, dataPath string) error
 	buf := new(bytes.Buffer)
 	err := utils.EncodeJson(buf, data)
 	if err != nil {
-		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrEncodeData.Error(), err)
+		return fmt.Errorf("%s: %w", appErr.ErrEncodeData.Error(), err)
 	}
 
 	//data.json 저장
 	if err := utils.SaveToFile(ctx, buf, dataPath); err != nil {
-		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrSaveData.Error(), err)
+		return fmt.Errorf("%s: %w", appErr.ErrSaveData.Error(), err)
+	} else {
+
 	}
 
 	//일반-bundle 생성
@@ -167,7 +179,7 @@ func buildBundle(ctx context.Context, data *usecase.Data, dataPath string) error
 		filepath.Dir(dataPath),
 	)
 	if err != nil {
-		return fmt.Errorf("[ERROR] %s: %w", appErr.ErrBuildBundle.Error(), err)
+		return fmt.Errorf("%s: %w", appErr.ErrBuildBundle.Error(), err)
 	}
 
 	return nil

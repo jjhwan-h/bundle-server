@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +10,8 @@ import (
 
 	"bundle-server/api/app/router"
 	"bundle-server/database"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -22,9 +23,9 @@ type Server struct {
 	*http.Server
 }
 
-func NewServer(port string) (*Server, error) {
-	log.Println("configuring server...")
-	api, err := router.New()
+func NewServer(port string, logger *zap.Logger) (*Server, error) {
+	logger.Debug("Configuring server...")
+	api, err := router.New(logger)
 	if err != nil {
 		return nil, fmt.Errorf("[%s]: %w", "ROUTER_INIT_FAIL", err)
 	}
@@ -39,9 +40,8 @@ func NewServer(port string) (*Server, error) {
 	return &Server{&srv}, nil
 }
 
-func (srv *Server) Start() {
-	log.Println("starting server...")
-	log.Println(srv.Addr)
+func (srv *Server) Start(logger *zap.Logger) {
+	logger.Info("starting server", zap.String("addr", srv.Addr))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -54,27 +54,29 @@ func (srv *Server) Start() {
 	}()
 
 	gracefulShutdown := func(reason string) {
-		log.Printf("[INFO] %s / Shutting down server...\n", reason)
+		logger.Info("Shutting down server...\n", zap.String("reason", reason))
 
 		dbErr := database.CloseAll()
 		if dbErr != nil {
-			log.Printf("%s: %v", "[ERROR] failed to close DB connections", dbErr)
+			logger.Error("Failed to close DB connections", zap.Error(dbErr))
 		}
-		log.Println("[INFO] ALL DB connections closed successfuly")
+		logger.Info("ALL DB connections closed successfuly")
 
 		srvCtx, cancelSrv := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancelSrv()
 		if err := srv.Shutdown(srvCtx); err != nil {
-			panic(err)
+			logger.Fatal("Failed to gracefully shut down", zap.Error(err))
 		}
-		log.Println("[INFO] Server gracefully stopped")
+		logger.Info("Server gracefully stopped")
+
+		_ = logger.Sync()
 	}
 
 	select {
 	case <-ctx.Done():
 		gracefulShutdown("Interrupt received")
 	case err := <-srvErr:
-		log.Printf("[ERROR] %v\n", err)
+		logger.Error("", zap.Error(err))
 		gracefulShutdown("Server error")
 	}
 }

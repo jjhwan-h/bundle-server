@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/spf13/viper"
 )
 
 func ToInterfaceSlice(strs []string) []any {
@@ -87,4 +88,8 @@ func StructToMap(v any) (map[string]any, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+func AppMode() string {
+	return viper.GetString("APP_ENV")
 }

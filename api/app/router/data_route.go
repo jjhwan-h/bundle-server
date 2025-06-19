@@ -8,12 +8,14 @@ import (
 	"bundle-server/domain/common/profile"
 	"bundle-server/domain/integration/category"
 	"bundle-server/domain/usecase"
+	"bundle-server/pkg/middleware"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
-func NewDataRouter(r *gin.Engine, timeout time.Duration) error {
+func NewDataRouter(r *gin.Engine, logger *zap.Logger, timeout time.Duration) error {
 	casbUsecase := usecase.NewCasbUsecase(
 		policy.NewPolicySaasRepo(database.GetDB("casb")),
 		org.NewOrgGroupRepo(database.GetDB("common")),
@@ -23,9 +25,10 @@ func NewDataRouter(r *gin.Engine, timeout time.Duration) error {
 
 	dh := &handler.DataHandler{
 		CasbUsecase: casbUsecase,
+		Logger:      logger,
 	}
 
-	dataRouter := r.Group("/data", TimeOutMiddleware(timeout))
+	dataRouter := r.Group("/data", middleware.TimeOutMiddleware(timeout))
 	{
 		// POST /data
 		dataRouter.POST("", dh.BuildDataJson)
