@@ -18,7 +18,7 @@ const (
 )
 
 func (e *DBError) Error() string {
-	return fmt.Sprintf("[%s] | %s | %v", e.Code, e.Message, e.Err)
+	return fmt.Sprintf(" %s [%s] | %v", e.Message, e.Code, e.Err)
 }
 
 func (e *DBError) Unwrap() error {

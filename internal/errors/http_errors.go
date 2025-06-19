@@ -16,7 +16,7 @@ type HttpError struct {
 }
 
 func (e *HttpError) Error() string {
-	return fmt.Sprintf("[%s] | %d | %v", e.Code, e.Status, e.Err)
+	return fmt.Sprintf("%d [%s] | %v", e.Status, e.Code, e.Err)
 }
 
 func NewHttpError(code string, status int, err string) *HttpError {

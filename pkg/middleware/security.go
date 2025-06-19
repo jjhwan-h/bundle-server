@@ -8,7 +8,7 @@ import (
 func Security() gin.HandlerFunc {
 	// https://pkg.go.dev/github.com/gin-contrib/secure#Config
 	return secure.New(secure.Config{
-		AllowedHosts: []string{"127.0.0.1:4001", "localhost:4001"},
+		AllowedHosts: []string{"127.0.0.1:4001", "localhost:4001"}, // 잘못된 HOST의 접근 필터링 => 올바른 보안대책필요
 		//SSLRedirect:           true, // https request만 허용
 		//SSLHost:               "ssl.example.com", // SSLRedirect가 true일때, 리디렉션 대상 호스트를 명시적으로 지정
 		STSSeconds:           86400, // HSTS헤더 유지시간

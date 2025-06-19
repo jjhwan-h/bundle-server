@@ -19,8 +19,8 @@ func New(logger *zap.Logger) (*gin.Engine, error) {
 	timeout := time.Duration(contextTime) * time.Second
 
 	r.Use(gin.Recovery())
+	r.Use(middleware.Logger(logger))
 	if gin.Mode() == gin.ReleaseMode {
-		r.Use(middleware.Logger(logger))
 		r.Use(middleware.Security())
 	}
 	r.Use(middleware.ErrorMiddleware())
