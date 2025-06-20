@@ -5,24 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
+	"bundle-server/config"
 	appErr "bundle-server/internal/errors"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/spf13/viper"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/mysqldialect"
 	"github.com/uptrace/bun/extra/bundebug"
 	"golang.org/x/sync/errgroup"
-)
-
-const (
-	timeout      = 3
-	readTimeout  = 5
-	writeTimeout = 5
-	parseTime    = true
 )
 
 var (
@@ -94,10 +88,14 @@ func CloseAll() error {
 
 func dbConn(dbName string) (*bun.DB, error) {
 	var db *bun.DB
-	user := viper.GetString("DB_USER")
-	password := viper.GetString("DB_PASSWORD")
-	host := viper.GetString("DB_HOST")
-	port := viper.GetString("DB_PORT")
+	user := os.Getenv("DB_USER")
+	password := os.Getenv("DB_PASSWORD")
+	host := os.Getenv("DB_HOST")
+	port := os.Getenv("DB_PORT")
+	timeout := config.Cfg.DB.Timeout
+	readTimeout := config.Cfg.DB.ReadTimeout
+	writeTimeout := config.Cfg.DB.WriteTimeout
+	parseTime := config.Cfg.DB.ParseTime
 
 	dsn := fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?parseTime=%t&timeout=%ds&readTimeout=%ds&writeTimeout=%ds",
@@ -118,16 +116,16 @@ func dbConn(dbName string) (*bun.DB, error) {
 
 	db = bun.NewDB(sqldb, mysqldialect.New())
 
-	db.SetMaxOpenConns(10)                  // 최대 연결 수
-	db.SetMaxIdleConns(5)                   // Idle 커넥션 수
-	db.SetConnMaxLifetime(30 * time.Minute) // 연결 생명주기
-	db.SetConnMaxIdleTime(5 * time.Minute)  // Idle 커넥션 유지 시간
+	db.SetMaxOpenConns(config.Cfg.DB.MaxOpenConns)                                    // 최대 연결 수
+	db.SetMaxIdleConns(config.Cfg.DB.MaxIdleConns)                                    // Idle 커넥션 수
+	db.SetConnMaxLifetime(time.Duration(config.Cfg.DB.ConnMaxLifetime) * time.Minute) // 연결 생명주기
+	db.SetConnMaxIdleTime(time.Duration(config.Cfg.DB.ConnMaxIdleTime) * time.Minute) // Idle 커넥션 유지 시간
 
 	if pingErr := CheckConn(db); pingErr != nil {
 		return nil, pingErr
 	}
 
-	if viper.GetBool("DB_DEBUG") {
+	if os.Getenv("DB_DEBUG") == "true" {
 		db.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))
 	}
 

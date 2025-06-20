@@ -2,6 +2,7 @@ package handler
 
 import (
 	"archive/tar"
+	"bundle-server/config"
 	"bundle-server/domain/integration/category"
 	"bundle-server/domain/usecase"
 	appErr "bundle-server/internal/errors"
@@ -22,7 +23,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gofrs/flock"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
 
@@ -47,9 +47,9 @@ func (dh *DataHandler) BuildDataJson(c *gin.Context) {
 
 	 ...
 	*/
-	service := "casb"
-	dataPath := fmt.Sprintf("%s/data/%s_data.json", viper.GetString("OPA_DATA_PATH"), service)
-	patchPath := fmt.Sprintf("%s/data/%s_patch.json", viper.GetString("OPA_DATA_PATH"), service)
+	service := "casb" // query or path parameter
+	dataPath := fmt.Sprintf("%s/data/%s_data.json", config.Cfg.OpaDataPath, service)
+	patchPath := fmt.Sprintf("%s/data/%s_patch.json", config.Cfg.OpaDataPath, service)
 
 	//data 빌드
 	data, err := dh.CasbUsecase.BuildDataJson(c)

@@ -1,6 +1,7 @@
 package router
 
 import (
+	"bundle-server/config"
 	"bundle-server/pkg/middleware"
 	"fmt"
 	"time"
@@ -9,14 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	contextTime = 3
-)
-
 func New(logger *zap.Logger) (*gin.Engine, error) {
 	r := gin.New()
 
-	timeout := time.Duration(contextTime) * time.Second
+	timeout := time.Duration(config.Cfg.HTTP.ContextTime) * time.Second
 
 	r.Use(gin.Recovery())
 	r.Use(middleware.Logger(logger))

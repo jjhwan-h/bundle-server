@@ -4,11 +4,11 @@ import (
 	"log"
 	"os"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-var cfgFile string
 var RootCmd = &cobra.Command{
 	Use:   ``,
 	Short: ``,
@@ -23,23 +23,10 @@ func Execute() {
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
+	cobra.OnInitialize(initEnv)
 }
 
-func initConfig() {
-	if cfgFile != "" {
-		viper.SetConfigFile(cfgFile)
-	} else {
-		viper.AddConfigPath(".")
-		viper.SetConfigName(".env")
-		viper.SetConfigType("env")
-	}
-
+func initEnv() {
+	_ = godotenv.Load("./.env")
 	viper.AutomaticEnv()
-
-	if err := viper.ReadInConfig(); err == nil {
-		log.Println("[INFO] Using config file:", viper.ConfigFileUsed())
-	} else {
-		log.Printf("[ERROR] Error reading config file: %v \n", err)
-	}
 }

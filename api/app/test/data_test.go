@@ -35,3 +35,7 @@ func TestBuildDataJson(t *testing.T) {
 
 	wg.Wait()
 }
+
+// 읽기와 쓰기요청이 동시에 있는 경우
+
+//

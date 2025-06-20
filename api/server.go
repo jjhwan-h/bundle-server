@@ -6,17 +6,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"bundle-server/api/app/router"
+	"bundle-server/config"
 	"bundle-server/database"
 
 	"go.uber.org/zap"
-)
-
-const (
-	ReadHeaderTimeout = 5
-	IdleTimeout       = 30
 )
 
 type Server struct {
@@ -33,8 +30,8 @@ func NewServer(port string, logger *zap.Logger) (*Server, error) {
 	srv := http.Server{
 		Addr:              port,
 		Handler:           api,
-		ReadHeaderTimeout: time.Duration(ReadHeaderTimeout) * time.Second,
-		IdleTimeout:       time.Duration(IdleTimeout) * time.Second,
+		ReadHeaderTimeout: time.Duration(config.Cfg.HTTP.ReadHeaderTimeout) * time.Second,
+		IdleTimeout:       time.Duration(config.Cfg.HTTP.IdleTimeout) * time.Second,
 	}
 
 	return &Server{&srv}, nil
@@ -43,7 +40,7 @@ func NewServer(port string, logger *zap.Logger) (*Server, error) {
 func (srv *Server) Start(logger *zap.Logger) {
 	logger.Info("starting server", zap.String("addr", srv.Addr))
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	srvErr := make(chan error, 1)

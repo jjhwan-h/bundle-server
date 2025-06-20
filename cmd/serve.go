@@ -3,16 +3,17 @@ package cmd
 import (
 	"bundle-server/api"
 	"bundle-server/database"
-	"bundle-server/internal/utils"
+
 	"fmt"
 	"log"
 	"os"
 
 	"gopkg.in/natefinch/lumberjack.v2"
 
+	"bundle-server/config"
+
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -22,56 +23,72 @@ var (
 )
 
 var serveCmd = &cobra.Command{
-	Use:   `serve`,
-	Short: ``,
-	Long:  ``,
+	Use:   "serve",
+	Short: "Start the API server",
 	Run: func(cmd *cobra.Command, args []string) {
-		var (
-			port   string
-			appEnv string
-		)
-		if appEnv = utils.AppMode(); appEnv == "dev" {
-			gin.SetMode(gin.DebugMode)
-		} else if appEnv == "prod" {
-			gin.SetMode(gin.ReleaseMode)
-		} else {
-			log.Printf("default mode: production")
-			gin.SetMode(gin.ReleaseMode)
-		}
-
-		if port, _ = cmd.Flags().GetString("port"); port == "" {
-			if port = viper.GetString("SERVER_PORT"); port == "" {
-				port = "4001"
-			}
-		}
-		port = fmt.Sprintf(":%s", port)
-
-		logPath := viper.GetString("LOG_PATH")
-		if logPath == "" {
-			logPath = "" // TODO: 수정 필요
-
-		}
-		logger := newZapWithLumberjack(appEnv, logPath)
-
-		err := database.Init(dbs)
-		if err != nil {
-			logger.Fatal("Failed to configure database", zap.Error(err))
-		}
-
-		api, err := api.NewServer(port, logger)
-		if err != nil {
-			logger.Fatal("Failed to configure server", zap.Error(err))
-		}
-		api.Start(logger)
+		runServer(cmd)
 	},
 }
 
 func init() {
-	serveCmd.Flags().StringP("port", "p", "4001", "Number of port")
+	serveCmd.Flags().StringP("port", "p", "4001", "Port to run the server on")
 	RootCmd.AddCommand(serveCmd)
 }
 
-func newZapWithLumberjack(appEnv string, logPath string) *zap.Logger {
+func runServer(cmd *cobra.Command) {
+	err := config.LoadConfig("./config.yaml")
+	if err != nil {
+		log.Fatal("config.yaml is missing")
+	}
+
+	appEnv := config.Cfg.AppEnv
+	setGinMode(appEnv)
+
+	port := resolvePort(cmd)
+	logPath := config.Cfg.Logger.FileName
+
+	if appEnv == "prod" && logPath == "" {
+		log.Fatal("logger.file_name is empty")
+	}
+
+	logger := newZapLogger(appEnv, logPath)
+
+	if err := database.Init(dbs); err != nil {
+		logger.Fatal("Failed to configure database", zap.Error(err))
+	}
+
+	server, err := api.NewServer(port, logger)
+	if err != nil {
+		logger.Fatal("Failed to configure server", zap.Error(err))
+	}
+
+	server.Start(logger)
+}
+
+func setGinMode(env string) {
+	switch env {
+	case "dev":
+		gin.SetMode(gin.DebugMode)
+	case "prod":
+		gin.SetMode(gin.ReleaseMode)
+	default:
+		log.Printf("Unknown appEnv '%s', defaulting to ReleaseMode", env)
+		gin.SetMode(gin.ReleaseMode)
+	}
+}
+
+func resolvePort(cmd *cobra.Command) string {
+	port, _ := cmd.Flags().GetString("port")
+	if port == "" {
+		port = os.Getenv("SERVER_PORT")
+		if port == "" {
+			port = "4001"
+		}
+	}
+	return fmt.Sprintf(":%s", port)
+}
+
+func newZapLogger(appEnv string, logPath string) *zap.Logger {
 	var (
 		writer     zapcore.WriteSyncer
 		encoder    zapcore.Encoder
@@ -88,10 +105,10 @@ func newZapWithLumberjack(appEnv string, logPath string) *zap.Logger {
 	} else {
 		writer = zapcore.AddSync(&lumberjack.Logger{
 			Filename:   logPath,
-			MaxSize:    100, // MB
-			MaxBackups: 3,
-			MaxAge:     28, // days
-			Compress:   true,
+			MaxSize:    config.Cfg.Logger.MaxSize, // MB
+			MaxBackups: config.Cfg.Logger.MaxBackups,
+			MaxAge:     config.Cfg.Logger.MaxAge, // days
+			Compress:   config.Cfg.Logger.Compress,
 		})
 		logLevel = zapcore.InfoLevel
 		encoderCfg = zap.NewProductionEncoderConfig()
