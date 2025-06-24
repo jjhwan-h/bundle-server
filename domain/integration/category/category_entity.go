@@ -1,9 +1,10 @@
 package category
 
 import (
-	"bundle-server/domain/casb/policy"
-	"bundle-server/domain/common/profile"
 	"context"
+
+	"github.com/jjhwan-h/bundle-server/domain/casb/policy"
+	"github.com/jjhwan-h/bundle-server/domain/common/profile"
 
 	"github.com/uptrace/bun"
 )

@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"bundle-server/config"
+	"github.com/jjhwan-h/bundle-server/config"
 
 	"github.com/gin-contrib/secure"
 	"github.com/gin-gonic/gin"

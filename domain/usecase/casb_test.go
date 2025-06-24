@@ -1,16 +1,17 @@
 package usecase
 
 import (
-	"bundle-server/database"
-	"bundle-server/domain/casb/policy"
-	"bundle-server/domain/common/org"
-	"bundle-server/domain/common/profile"
-	"bundle-server/domain/integration/category"
 	"context"
 	"encoding/json"
 	"log"
 	"sync"
 	"testing"
+
+	"github.com/jjhwan-h/bundle-server/database"
+	"github.com/jjhwan-h/bundle-server/domain/casb/policy"
+	"github.com/jjhwan-h/bundle-server/domain/common/org"
+	"github.com/jjhwan-h/bundle-server/domain/common/profile"
+	"github.com/jjhwan-h/bundle-server/domain/integration/category"
 
 	"github.com/spf13/viper"
 )

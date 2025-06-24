@@ -1,10 +1,11 @@
 package router
 
 import (
-	"bundle-server/config"
-	"bundle-server/pkg/middleware"
 	"fmt"
 	"time"
+
+	"github.com/jjhwan-h/bundle-server/config"
+	"github.com/jjhwan-h/bundle-server/pkg/middleware"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -22,9 +23,9 @@ func New(logger *zap.Logger) (*gin.Engine, error) {
 	}
 	r.Use(middleware.ErrorMiddleware())
 
-	r.Group("/data")
+	r.Group("")
 	{
-		err := NewDataRouter(r, logger, timeout)
+		err := NewServiceRouter(r, logger, timeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize data router: %w", err)
 		}

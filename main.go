@@ -1,6 +1,6 @@
 package main
 
-import "bundle-server/cmd"
+import "github.com/jjhwan-h/bundle-server/cmd"
 
 func main() {
 	cmd.Execute()

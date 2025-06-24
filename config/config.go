@@ -16,14 +16,16 @@ type Config struct {
 		ContextTime       int `mapstructure:"context_time"`
 	} `mapstructure:"http"`
 	DB struct {
-		Timeout         int  `mapstructure:"timeout"`
-		ReadTimeout     int  `mapstructure:"read_time_out"`
-		WriteTimeout    int  `mapstructure:"write_time_out"`
-		ParseTime       bool `mapstructure:"parse_time"`
-		MaxOpenConns    int  `mapstructure:"max_open_conns"`
-		MaxIdleConns    int  `mapstructure:"max_idle_conns"`
-		ConnMaxLifetime int  `mapstructure:"conn_max_lifetime"`
-		ConnMaxIdleTime int  `mapstructure:"conn_max_idle_time"`
+		DataBase        []string          `mapstructure:"database"`
+		Repository      map[string]string `mapstructure:"repository"`
+		Timeout         int               `mapstructure:"timeout"`
+		ReadTimeout     int               `mapstructure:"read_time_out"`
+		WriteTimeout    int               `mapstructure:"write_time_out"`
+		ParseTime       bool              `mapstructure:"parse_time"`
+		MaxOpenConns    int               `mapstructure:"max_open_conns"`
+		MaxIdleConns    int               `mapstructure:"max_idle_conns"`
+		ConnMaxLifetime int               `mapstructure:"conn_max_lifetime"`
+		ConnMaxIdleTime int               `mapstructure:"conn_max_idle_time"`
 	} `mapstructure:"db"`
 	Logger struct {
 		FileName   string `mapstructure:"file_name"`
@@ -44,6 +46,9 @@ type Config struct {
 		ReferrerPolicy       string            `mapstructure:"referrer_policy"`
 		SSLProxyHeaders      map[string]string `mapstructure:"ssl_proxy_headers"`
 	} `mapstructure:"security"`
+	Clients struct {
+		Service map[string][]string `mapstructure:"service"`
+	} `mapstructure:"clients"`
 }
 
 var Cfg Config

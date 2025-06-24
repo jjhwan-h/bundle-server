@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"bundle-server/config"
-	appErr "bundle-server/internal/errors"
+	"github.com/jjhwan-h/bundle-server/config"
+	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/uptrace/bun"

@@ -1,10 +1,11 @@
 package policy
 
 import (
-	appErr "bundle-server/internal/errors"
 	"context"
 	"database/sql"
 	"errors"
+
+	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
 
 	_ "embed"
 

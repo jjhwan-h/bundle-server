@@ -1,12 +1,13 @@
 package category
 
 import (
-	"bundle-server/domain/casb/policy"
-	appErr "bundle-server/internal/errors"
 	"context"
 	"database/sql"
 	_ "embed"
 	"errors"
+
+	"github.com/jjhwan-h/bundle-server/domain/casb/policy"
+	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
 
 	"github.com/uptrace/bun"
 )

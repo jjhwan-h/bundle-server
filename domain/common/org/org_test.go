@@ -1,11 +1,12 @@
 package org
 
 import (
-	"bundle-server/database"
 	"context"
 	"log"
 	"sync"
 	"testing"
+
+	"github.com/jjhwan-h/bundle-server/database"
 
 	"github.com/spf13/viper"
 )

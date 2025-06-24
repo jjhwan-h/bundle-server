@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	appErr "bundle-server/internal/errors"
+	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
 
 	"github.com/gin-gonic/gin"
 )

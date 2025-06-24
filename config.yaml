@@ -1,7 +1,7 @@
-opa_data_path: "/mnt/d"
+opa_data_path: "/mnt/d/bundle-test"
 
 # "prod" | "dev"
-app_env: "prod"
+app_env: "dev"
 
 http:
   read_header_timeout: 5
@@ -9,6 +9,14 @@ http:
   context_time: 3 
 
 db:
+  database: # init 시 conn생성할 db
+    - "casb_bak"
+    - "common_bak"
+  repository: # repo별 연결 db
+    policy_repo: "casb_bak"
+    org_repo: "common_bak"
+    profile_repo: "common_bak"
+    category_repo: "casb_bak"
   timeout: 3
   read_time_out: 5
   write_time_out: 5
@@ -39,4 +47,12 @@ security:
   ie_no_open: true
   referrer_policy: "strict-origin-when-cross-origin"
   ssl_proxy_headers:
-    # X-Forwarded-Proto: "https"
+    #X-Forwarded-Proto: "https"
+
+# opa-sdk-clients
+clients:
+  service:
+    casb: 
+      - "127.0.0.1:5556"
+    ztna: 
+      - "127.0.0.1:5557"

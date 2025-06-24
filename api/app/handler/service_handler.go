@@ -1,0 +1,565 @@
+package handler
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/jjhwan-h/bundle-server/config"
+	"github.com/jjhwan-h/bundle-server/domain/integration/category"
+	"github.com/jjhwan-h/bundle-server/domain/usecase"
+	"github.com/jjhwan-h/bundle-server/internal/clients"
+	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
+	"github.com/jjhwan-h/bundle-server/internal/utils"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gofrs/flock"
+	"go.uber.org/zap"
+)
+
+type ServiceHandler struct {
+	CasbUsecase usecase.CasbUsecase
+	Client      *clients.Client
+	*zap.Logger
+}
+
+/*
+BuildDataNBundles가 수행하는 작업
+(1) data.json 빌드
+(2) delta-bundle 생성
+(3) bundle 생성
+(4) 등록된 opa-client에 알림
+*/
+func (sh *ServiceHandler) BuildDataNBundles(c *gin.Context) {
+	service := c.Param("service")
+	dataPath := fmt.Sprintf("%s/%s/regular/data.json", config.Cfg.OpaDataPath, service)
+	patchPath := fmt.Sprintf("%s/%s/delta/patch.json", config.Cfg.OpaDataPath, service)
+
+	sh.Debug("data", zap.String("data", dataPath))
+	//data 빌드
+	data, err := sh.CasbUsecase.BuildDataJson(c)
+	if err != nil {
+		sh.Error(appErr.ErrBuildData.Error(), zap.Error(err))
+		c.Error(appErr.NewHttpError(
+			"internal_server_error",
+			http.StatusInternalServerError,
+			err.Error(),
+		))
+		return
+	}
+
+	// delta-bundle 생성
+	err = buildDeltaBundle(
+		c,
+		data,
+		dataPath,
+		patchPath,
+		fmt.Sprintf("%s/%s/delta.tar.gz", config.Cfg.OpaDataPath, service),
+	)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, appErr.ErrNoChanges) { // data.json 변경 x
+				sh.Info("patch.json not generated: no changes detected", zap.String("patch", patchPath))
+				c.JSON(http.StatusOK,
+					&httpResponse{
+						Code:    "no_changes",
+						Message: err.Error(),
+						Status:  http.StatusOK,
+					})
+				return
+			} else {
+				sh.Error("failed to build delta bundle", zap.Error(err))
+				c.Error(appErr.NewHttpError(
+					"internal_server_error",
+					http.StatusInternalServerError,
+					err.Error(),
+				))
+				return
+			}
+		} else {
+			sh.Info("No existing data.json found. Skipping delta bundle generation", zap.String("data", dataPath))
+		}
+	} else {
+		sh.Info("Delta Bundle created successfully", zap.String("service", service))
+	}
+
+	// 일반-bundle 생성
+	// opa-sdk-client들 초기 실행 시 변경사항이 반영된 일반-bundle 필요
+	err = buildBundle(
+		c,
+		data,
+		dataPath,
+		fmt.Sprintf("%s/%s/regular.tar.gz", config.Cfg.OpaDataPath, service),
+	)
+	if err != nil {
+		sh.Error("failed to build regular bundle", zap.Error(err))
+		c.Error(appErr.NewHttpError(
+			"internal_server_error",
+			http.StatusInternalServerError,
+			err.Error(),
+		))
+		return
+	} else {
+		sh.Info("Regular Bundle created successfully", zap.String("service", service))
+	}
+
+	go func() {
+		err := sh.Client.Hook("/hooks/bundle-update?type=delta", service)
+		if err != nil {
+			sh.Error("failed to event notification", zap.Error(err))
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, &httpResponse{
+		Code:    "success",
+		Message: "data.json and bundle were generated successfully. Notification will be sent to the OPA client.",
+		Status:  http.StatusAccepted,
+	})
+}
+
+/*
+BuildBundle가 수행하는 작업
+(1) (업데이트된 policy를 토대로)bundle 생성
+(2) 등록된 opa-client에 알림
+*/
+func (sh *ServiceHandler) CreateBundle(c *gin.Context) {
+	service := c.Param("service")
+	err := createBundle(
+		c.Request.Context(),
+		fmt.Sprintf("%s/%s/regular.tar.gz", config.Cfg.OpaDataPath, service),
+		fmt.Sprintf("%s/%s/regular", config.Cfg.OpaDataPath, service),
+	)
+
+	if err != nil {
+		sh.Error("failed to build regular bundle", zap.Error(err))
+		c.Error(appErr.NewHttpError(
+			"internal_server_error",
+			http.StatusInternalServerError,
+			err.Error(),
+		))
+		return
+	} else {
+		sh.Info("Regular Bundle created successfully", zap.String("service", service))
+	}
+
+	go func() {
+		err := sh.Client.Hook("/hooks/bundle-update", service)
+		if err != nil {
+			sh.Error("failed to event notification", zap.Error(err))
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, &httpResponse{
+		Code:    "success",
+		Message: " bundle were generated successfully. Notification will be sent to the OPA client.",
+		Status:  http.StatusAccepted,
+	})
+}
+
+/*
+RegisterPolicy가 수행하는 작업
+(1) policy.rego파일 업로드
+*/
+func (sh *ServiceHandler) RegisterPolicy(c *gin.Context) {
+	service := c.Param("service")
+	policyPath := fmt.Sprintf("%s/%s/regular/policy.rego", config.Cfg.OpaDataPath, service)
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		sh.Error("failed to parse form file", zap.Error(err))
+		c.Error(appErr.NewHttpError(
+			"internal_server_error",
+			http.StatusInternalServerError,
+			err.Error(),
+		))
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		sh.Error("failed to open form file", zap.Error(err))
+		c.Error(appErr.NewHttpError(
+			"internal_server_error",
+			http.StatusInternalServerError,
+			err.Error(),
+		))
+		return
+	}
+	defer file.Close()
+
+	err = utils.SaveToFile(c.Request.Context(), file, policyPath)
+	if err != nil {
+		sh.Error("failed to save form file", zap.Error(err))
+		c.Error(appErr.NewHttpError(
+			"internal_server_error",
+			http.StatusInternalServerError,
+			err.Error(),
+		))
+		return
+	} else {
+		sh.Info("policy.rego created successfully", zap.String("service", service))
+	}
+
+	c.JSON(http.StatusCreated, &httpResponse{
+		Code:    "success",
+		Message: "The policy file was generated successfully.",
+		Status:  http.StatusCreated,
+	})
+}
+
+func (sh *ServiceHandler) ServeBundle(c *gin.Context) {
+	var path string
+
+	service := c.Param("service")
+	t := c.Query("type")
+
+	switch t {
+	case "delta":
+		path = fmt.Sprintf("%s/%s/delta.tar.gz", config.Cfg.OpaDataPath, service)
+	case "", "regular":
+		path = fmt.Sprintf("%s/%s/regular.tar.gz", config.Cfg.OpaDataPath, service)
+	default:
+		sh.Info("Invalid bundle type, defaulting to regular bundle",
+			zap.String("requested_type", t),
+			zap.String("service", service),
+		)
+		path = fmt.Sprintf("%s/%s/regular.tar.gz", config.Cfg.OpaDataPath, service)
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		sh.Error("bundle file not found", zap.Error(err))
+		c.Error(appErr.NewHttpError(
+			"internal_server_error",
+			http.StatusInternalServerError,
+			err.Error(),
+		))
+		return
+	}
+
+	c.Header("Content-Type", "application/gzip")
+	http.ServeFile(c.Writer, c.Request, path)
+}
+
+func (sh *ServiceHandler) RegisterClients(c *gin.Context) {
+	service := c.Param("service")
+
+	var clients []string
+
+	err := c.ShouldBindJSON(&clients)
+	if err != nil {
+		sh.Error("Invalid reqeust body. Please check the JSON format")
+		c.Error(appErr.NewHttpError(
+			"bad_request",
+			http.StatusBadRequest,
+			err.Error(),
+		))
+		return
+	}
+
+	if len(clients) == 0 {
+		msg := "no clients found"
+		sh.Error(msg)
+		c.Error(appErr.NewHttpError(
+			"no_data",
+			http.StatusNotFound,
+			msg,
+		))
+		return
+	}
+
+	if err = sh.Client.AddHookClient(clients, service); err != nil {
+		c.Error(appErr.NewHttpError(
+			"confilct",
+			http.StatusConflict,
+			err.Error(),
+		))
+		return
+	}
+
+	sh.Info("client address has been successfully registerd", zap.String("service", service))
+
+	c.JSON(http.StatusOK, httpResponse{
+		Code:    "client_registered",
+		Message: "Client address has been successfully registered.",
+		Status:  http.StatusOK,
+	})
+}
+
+func (sh *ServiceHandler) ServeClients(c *gin.Context) {
+	clients := sh.Client.GetAll()
+	c.JSON(http.StatusOK, clients)
+}
+
+func (sh *ServiceHandler) ServeServiceClients(c *gin.Context) {
+	service := c.Param("service")
+
+	clients := sh.Client.Get(service)
+	c.JSON(http.StatusOK, clients)
+}
+
+func (sh *ServiceHandler) DeleteClients(c *gin.Context) {
+	t := c.Query("client")
+	service := c.Param("service")
+
+	if t != "" {
+		err := sh.Client.Delete(service, t)
+		if err != nil {
+			sh.Info("client not found", zap.String("service", service), zap.String("ip", t))
+			c.JSON(http.StatusNotFound, httpResponse{
+				Code:    "client_not_found",
+				Message: "failed to delete client.",
+				Status:  http.StatusNotFound,
+			})
+			return
+		}
+		sh.Info("client deleted successfully", zap.String("servcie", service), zap.String("ip", t))
+		c.JSON(http.StatusOK, httpResponse{
+			Code:    "delete_successfully",
+			Message: "client deleted successfully",
+			Status:  http.StatusOK,
+		})
+		return
+	} else { // 전체삭제
+		sh.Client.DeleteAll(service)
+		sh.Info("all clients deleted successfully", zap.String("service", service))
+		c.JSON(http.StatusOK, httpResponse{
+			Code:    "delete_successfully",
+			Message: "all clients deleted successfully",
+			Status:  http.StatusOK,
+		})
+		return
+	}
+}
+
+func buildDeltaBundle(ctx context.Context, data *usecase.Data, dataPath, patchPath, tarGzPath string) error {
+	byteOldData, err := os.ReadFile(dataPath)
+	if err != nil {
+		return fmt.Errorf("%s: %w", "failed to read data.json", err)
+	}
+
+	var oldData usecase.Data
+	if err := json.Unmarshal(byteOldData, &oldData); err != nil {
+		return fmt.Errorf("%s: %w", "failed to unmarshal data to map", err)
+	}
+
+	//patch.json 생성
+	patch, err := buildPatchJson(&oldData, data)
+	if err != nil {
+		return fmt.Errorf("patch.json not generated: %w", err)
+	}
+	buf := new(bytes.Buffer)
+	err = utils.EncodeJson(buf, patch)
+	if err != nil {
+		return fmt.Errorf("%s: %w", appErr.ErrEncodeData.Error(), err)
+	}
+
+	if err := utils.SaveToFile(ctx, buf, patchPath); err != nil {
+		return fmt.Errorf("%s: %w", appErr.ErrSaveData.Error(), err)
+	}
+
+	//delta-bundle 생성
+	err = createBundle(
+		ctx,
+		tarGzPath,
+		filepath.Dir(patchPath),
+	)
+	if err != nil {
+		return fmt.Errorf("%s: %w", appErr.ErrBuildBundle.Error(), err)
+	}
+
+	return nil
+}
+
+func buildBundle(ctx context.Context, data *usecase.Data, dataPath, tarGzPath string) error {
+	//json형식으로 인코딩
+	buf := new(bytes.Buffer)
+	err := utils.EncodeJson(buf, data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", appErr.ErrEncodeData.Error(), err)
+	}
+
+	//data.json 저장
+	if err := utils.SaveToFile(ctx, buf, dataPath); err != nil {
+		return fmt.Errorf("%s: %w", appErr.ErrSaveData.Error(), err)
+	}
+
+	//일반-bundle 생성
+	err = createBundle(
+		ctx,
+		tarGzPath,
+		filepath.Dir(dataPath),
+	)
+	if err != nil {
+		return fmt.Errorf("%s: %w", appErr.ErrBuildBundle.Error(), err)
+	}
+
+	return nil
+}
+
+func createBundle(ctx context.Context, tarGzPath, sourceDir string) error {
+	err := os.MkdirAll(filepath.Dir(tarGzPath), 0755)
+	if err != nil {
+		return err
+	}
+
+	lock := flock.New(tarGzPath + ".lock")
+	locked, err := lock.TryLockContext(ctx, time.Millisecond*500)
+	if err != nil {
+		return fmt.Errorf("failed to acquire lock: %w", err)
+	}
+	if !locked {
+		return fmt.Errorf("resource busy: tar file is locked")
+	}
+	defer lock.Unlock()
+
+	files, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return fmt.Errorf("failed to read directory: %w", err)
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("source directory has no file")
+	}
+
+	tmpPath := tarGzPath + ".tmp"
+	tarFile, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create tmp tar.gz: %w", err)
+	}
+	defer tarFile.Close()
+
+	gzipWriter := gzip.NewWriter(tarFile)
+	defer gzipWriter.Close()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+
+	for _, file := range files {
+		if file.IsDir() || strings.HasSuffix(file.Name(), ".lock") {
+			continue
+		}
+
+		filePath := filepath.Join(sourceDir, file.Name())
+
+		info, err := os.Stat(filePath)
+		if err != nil {
+			return err
+		}
+
+		header, err := tar.FileInfoHeader(info, file.Name())
+		if err != nil {
+			return err
+		}
+		header.Name = file.Name()
+
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return err
+		}
+
+		f, err := os.Open(filePath)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(tarWriter, f)
+		f.Close()
+		if err != nil {
+			return err
+		}
+	}
+
+	return os.Rename(tmpPath, tarGzPath)
+}
+
+func buildPatchJson(oldData *usecase.Data, data *usecase.Data) (*patch, error) {
+	patchData := getChanges(oldData, data)
+	if len(patchData) == 0 {
+		return nil, appErr.ErrNoChanges
+	}
+	return &patch{
+		Data: patchData,
+	}, nil
+}
+
+func getChanges(oldData *usecase.Data, data *usecase.Data) (changes []patchData) {
+	// default_effect
+	if oldData.DefaultEffect != data.DefaultEffect {
+		changes = append(changes, patchData{
+			Op:    "replace",
+			Path:  "/default_effect",
+			Value: data.DefaultEffect,
+		})
+	}
+	// policies
+	for _, newPolicy := range data.Policies {
+		isExist := false
+		for idx, oldPolicy := range oldData.Policies {
+			if newPolicy.PolicyID == oldPolicy.PolicyID {
+				isExist = true
+				changes = append(changes, comparePolicies(oldPolicy, newPolicy, idx)...)
+				break
+			}
+		}
+		if !isExist {
+			changes = append(changes, patchData{"upsert", "/policies", newPolicy})
+		}
+	}
+
+	for idx, oldPolicy := range oldData.Policies {
+		isExist := false
+		for _, newPolicy := range data.Policies {
+			if oldPolicy.PolicyID == newPolicy.PolicyID {
+				isExist = true
+				break
+			}
+		}
+		if !isExist {
+			changes = append(changes, patchData{"remove", fmt.Sprintf("/policies/%d", idx), nil})
+		}
+	}
+	return
+}
+
+func comparePolicies(oldPolicy, newPolicy usecase.Policy, idx int) (changes []patchData) {
+	prefix := fmt.Sprintf("/policies/%d", idx)
+
+	if newPolicy.PolicyID != oldPolicy.PolicyID {
+		changes = append(changes, patchData{"replace", prefix + "/id", newPolicy.PolicyID})
+	}
+	if newPolicy.Priority != oldPolicy.Priority {
+		changes = append(changes, patchData{"replace", prefix + "/priority", newPolicy.Priority})
+	}
+	if newPolicy.PolicyName != oldPolicy.PolicyName {
+		changes = append(changes, patchData{"replace", prefix + "/name", newPolicy.PolicyName})
+	}
+	if newPolicy.Effect != oldPolicy.Effect {
+		changes = append(changes, patchData{"replace", prefix + "/effect", newPolicy.Effect})
+	}
+	if !slices.Equal(newPolicy.Subject.Users, oldPolicy.Subject.Users) {
+		changes = append(changes, patchData{"replace", prefix + "/subject/users", newPolicy.Subject.Users})
+	}
+	if !slices.Equal(newPolicy.Subject.Groups, oldPolicy.Subject.Groups) {
+		changes = append(changes, patchData{"replace", prefix + "/subject/groups", newPolicy.Subject.Groups})
+	}
+
+	if !equalService(newPolicy.Services, oldPolicy.Services) {
+		changes = append(changes, patchData{"replace", prefix + "/services", newPolicy.Services})
+	}
+
+	return
+}
+
+// 내부 객체 값은 동일하지만 객체 순서가 바뀐 경우에도 다른 것으로 처리됨.
+func equalService(a, b []category.CategoryService) bool {
+	return reflect.DeepEqual(a, b)
+}

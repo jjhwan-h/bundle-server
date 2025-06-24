@@ -1,14 +1,15 @@
 package category
 
 import (
-	"bundle-server/database"
-	"bundle-server/domain/casb/policy"
 	"context"
 	"encoding/json"
 	"log"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jjhwan-h/bundle-server/database"
+	"github.com/jjhwan-h/bundle-server/domain/casb/policy"
 
 	"github.com/spf13/viper"
 )

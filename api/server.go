@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"bundle-server/api/app/router"
-	"bundle-server/config"
-	"bundle-server/database"
+	"github.com/jjhwan-h/bundle-server/api/app/router"
+	"github.com/jjhwan-h/bundle-server/config"
+	"github.com/jjhwan-h/bundle-server/database"
 
 	"go.uber.org/zap"
 )

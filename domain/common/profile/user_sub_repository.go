@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
-	appErr "bundle-server/internal/errors"
+	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
 
 	"github.com/uptrace/bun"
 )

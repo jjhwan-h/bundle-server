@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"bundle-server/api"
-	"bundle-server/database"
+	"github.com/jjhwan-h/bundle-server/api"
+	"github.com/jjhwan-h/bundle-server/database"
 
 	"fmt"
 	"log"
@@ -10,16 +10,12 @@ import (
 
 	"gopkg.in/natefinch/lumberjack.v2"
 
-	"bundle-server/config"
+	"github.com/jjhwan-h/bundle-server/config"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-)
-
-var (
-	dbs = []string{"casb", "common"}
 )
 
 var serveCmd = &cobra.Command{
@@ -38,7 +34,7 @@ func init() {
 func runServer(cmd *cobra.Command) {
 	err := config.LoadConfig("./config.yaml")
 	if err != nil {
-		log.Fatal("config.yaml is missing")
+		log.Fatal("config.yaml is missing or invalid format")
 	}
 
 	appEnv := config.Cfg.AppEnv
@@ -53,6 +49,14 @@ func runServer(cmd *cobra.Command) {
 
 	logger := newZapLogger(appEnv, logPath)
 
+	dbs := config.Cfg.DB.DataBase
+	if len(dbs) == 0 {
+		logger.Fatal(
+			"Failed to configure database",
+			zap.Error(
+				fmt.Errorf("database to connect to is not configured in the config.yaml file")),
+		)
+	}
 	if err := database.Init(dbs); err != nil {
 		logger.Fatal("Failed to configure database", zap.Error(err))
 	}
@@ -120,5 +124,5 @@ func newZapLogger(appEnv string, logPath string) *zap.Logger {
 
 	core := zapcore.NewCore(encoder, writer, logLevel)
 
-	return zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
+	return zap.New(core, zap.AddCaller())
 }

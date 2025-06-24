@@ -1,9 +1,5 @@
 package handler
 
-// type hookClient struct {
-// 	Addr string `json:"addr"`
-// }
-
 type patch struct {
 	Data []patchData `json:"data"`
 }
