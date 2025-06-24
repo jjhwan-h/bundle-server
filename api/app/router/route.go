@@ -6,6 +6,8 @@ import (
 
 	"github.com/jjhwan-h/bundle-server/config"
 	"github.com/jjhwan-h/bundle-server/pkg/middleware"
+	swaggerfiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -30,7 +32,7 @@ func New(logger *zap.Logger) (*gin.Engine, error) {
 			return nil, fmt.Errorf("failed to initialize data router: %w", err)
 		}
 	}
-
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerfiles.Handler))
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"message": "pong",

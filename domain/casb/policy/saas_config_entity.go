@@ -7,7 +7,7 @@ import (
 )
 
 type PolicySaasConfig struct {
-	bun.BaseModel `bun:"table:t_policy_saas_config"`
+	bun.BaseModel `bun:"table:casb_policy_saas_config"`
 	Effect        string `bun:"effect" json:"effect"`
 	Action        string `bun:"action" json:"action"`
 }

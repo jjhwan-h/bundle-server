@@ -17,7 +17,7 @@ const (
 )
 
 type TProfileUserSub struct {
-	bun.BaseModel `bun:"table:t_profile_user_sub"`
+	bun.BaseModel `bun:"table:common_profile_user_sub"`
 	PID           uint   `bun:"pid,pk"           json:"pid"`
 	GType         uint8  `bun:"gtype,pk"         json:"gtype"`
 	GCode         string `bun:"gcode,pk"         json:"gcode"`

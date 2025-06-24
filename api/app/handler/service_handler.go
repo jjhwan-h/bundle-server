@@ -35,13 +35,26 @@ type ServiceHandler struct {
 	*zap.Logger
 }
 
-/*
-BuildDataNBundles가 수행하는 작업
-(1) data.json 빌드
-(2) delta-bundle 생성
-(3) bundle 생성
-(4) 등록된 opa-client에 알림
-*/
+// @title service api
+// @version 1.0
+// @BasePath /services
+
+// BuildDataNBundles godoc
+// @Summary      Trigger policy DB update and generate OPA bundles
+// @Description  Receives a trigger event to regenerate OPA's data.json, regular bundle, and delta bundle.
+// If changes are detected, notifies OPA SDK client via webhook (POST /hooks/bundle-update?type=delta).
+//
+// @Tags         service
+// @Produce      json
+// @Param        service path string true "Service name (used to determine bundle/data path)"
+//
+// @Success      202 {object} httpResponse "Accepted - data.json and bundle were generated successfully"
+// @Success      200 {object} httpResponse "OK - no changes detected in data.json"
+// @Failure      500 {object} appErr.HttpError "Internal server error during bundle generation"
+// @Router       /services/{service}/data/trigger [post]
+//
+// @Example Request:
+// POST /services/casb/data/trigger
 func (sh *ServiceHandler) BuildDataNBundles(c *gin.Context) {
 	service := c.Param("service")
 	dataPath := fmt.Sprintf("%s/%s/regular/data.json", config.Cfg.OpaDataPath, service)
@@ -129,11 +142,21 @@ func (sh *ServiceHandler) BuildDataNBundles(c *gin.Context) {
 	})
 }
 
-/*
-BuildBundle가 수행하는 작업
-(1) (업데이트된 policy를 토대로)bundle 생성
-(2) 등록된 opa-client에 알림
-*/
+// CreateBundle godoc
+// @Summary      Trigger policy.rego update and generate OPA bundles
+// @Description  Receives a trigger event to regenerate regular bundle.
+// If changes are detected, notifies OPA SDK client via webhook (POST /hooks/bundle-update).
+//
+// @Tags         service
+// @Produce      json
+// @Param        service path string true "Service name (used to determine bundle/data path)"
+//
+// @Success      202 {object} httpResponse "Accepted - bundle were generated successfully"
+// @Failure      500 {object} appErr.HttpError "Internal server error during bundle generation"
+// @Router       /services/{service}/policy/trigger [post]
+//
+// @Example Request:
+// POST /services/casb/policy/trigger
 func (sh *ServiceHandler) CreateBundle(c *gin.Context) {
 	service := c.Param("service")
 	err := createBundle(
@@ -168,10 +191,25 @@ func (sh *ServiceHandler) CreateBundle(c *gin.Context) {
 	})
 }
 
-/*
-RegisterPolicy가 수행하는 작업
-(1) policy.rego파일 업로드
-*/
+// RegisterPolicy godoc
+// @Summary      Register policy.rego
+// @Description  Uploads a policy.rego file and saves it to the service-specific bundle directory.
+// @Tags         service
+// @Accept       multipart/form-data
+// @Produce      json
+//
+// @Param        service path string true "Service name (used to determine bundle/data path)"
+// @Param        file formData file true "The policy.rego file to upload"
+//
+// @Success      201 {object} httpResponse "Created - The policy file was saved successfully"
+// @Failure      500 {object} appErr.HttpError "Internal server error during file saving"
+//
+// @Router       /services/{service}/policy [post]
+//
+// @Example Request:
+// POST /services/casb/policy
+// Content-Type: multipart/form-data
+// Form field: file = policy.rego
 func (sh *ServiceHandler) RegisterPolicy(c *gin.Context) {
 	service := c.Param("service")
 	policyPath := fmt.Sprintf("%s/%s/regular/policy.rego", config.Cfg.OpaDataPath, service)
@@ -219,6 +257,23 @@ func (sh *ServiceHandler) RegisterPolicy(c *gin.Context) {
 	})
 }
 
+// ServeBundle godoc
+// @Summary      Download OPA bundle file
+// @Description  Serves either a regular or delta bundle file (.tar.gz) for a specific service. Use query parameter `type=delta` to get the delta bundle.
+// @Tags         service
+// @Produce      application/gzip
+//
+// @Param        service path string true "Service name (used to determine bundle path)"
+// @Param        type query string false "Bundle type: 'regular' (default) or 'delta'"
+//
+// @Success      200 {file} file "Bundle file (application/gzip)"
+// @Failure      500 {object} appErr.HttpError "Internal server error or file not found"
+//
+// @Router       /services/{service}/bundle [get]
+//
+// @Example Request:
+// GET /services/casb/bundle
+// GET /services/casb/bundle?type=delta
 func (sh *ServiceHandler) ServeBundle(c *gin.Context) {
 	var path string
 
@@ -252,6 +307,32 @@ func (sh *ServiceHandler) ServeBundle(c *gin.Context) {
 	http.ServeFile(c.Writer, c.Request, path)
 }
 
+// RegisterClients godoc
+// @Summary      Register OPA webhook client addresses
+// @Description  Registers one or more OPA SDK client addresses for the specified service. Accepts a JSON array of client URLs or IPs.
+// @Tags         service
+// @Accept       json
+// @Produce      json
+//
+// @Param        service path string true "Service name (used to identify the target OPA bundle)"
+// @Param        clients body []string true "List of OPA client addresses (IP or domain)"
+//
+// @Success      200 {object} httpResponse "Clients registered successfully"
+// @Failure      400 {object} appErr.HttpError "Invalid JSON format"
+// @Failure      404 {object} appErr.HttpError "No clients found in request"
+// @Failure      409 {object} appErr.HttpError "Conflict - client already exists or internal error"
+//
+// @Router       /services/{service}/clients [post]
+//
+// @Example Request:
+// POST /services/casb/clients
+// Body:
+// [
+//
+//	"http://127.0.0.1:5556",
+//	"http://opa-client.k8s.local:8181"
+//
+// ]
 func (sh *ServiceHandler) RegisterClients(c *gin.Context) {
 	service := c.Param("service")
 
@@ -297,11 +378,36 @@ func (sh *ServiceHandler) RegisterClients(c *gin.Context) {
 	})
 }
 
+// ServeClients godoc
+// @Summary      Get all registered OPA clients
+// @Description  Returns a map of all registered OPA clients grouped by service.
+// @Tags         service
+// @Produce      json
+//
+// @Success      200 {object} clientGroupResponse "Map of service name to client list"
+//
+// @Router       /services/clients [get]
+//
+// @Example Request:
+// GET /services/clients
 func (sh *ServiceHandler) ServeClients(c *gin.Context) {
 	clients := sh.Client.GetAll()
 	c.JSON(http.StatusOK, clients)
 }
 
+// ServeServiceClients godoc
+// @Summary      Get clients by service
+// @Description  Returns a list of registered OPA client addresses for the specified service.
+// @Tags         service
+// @Produce      json
+//
+// @Param        service path string true "Service name"
+// @Success      200 {array} clientGroup "List of registered clients"
+//
+// @Router       /services/{service}/clients [get]
+//
+// @Example Request:
+// GET /services/casb/clients
 func (sh *ServiceHandler) ServeServiceClients(c *gin.Context) {
 	service := c.Param("service")
 
@@ -309,6 +415,23 @@ func (sh *ServiceHandler) ServeServiceClients(c *gin.Context) {
 	c.JSON(http.StatusOK, clients)
 }
 
+// DeleteClients godoc
+// @Summary      Delete one or all OPA clients for a service
+// @Description  Deletes a specific client (by IP or DNS) or all clients for a service if no client is specified.
+// @Tags         service
+// @Produce      json
+//
+// @Param        service path string true "Service name"
+// @Param        client query string false "Client address (IP or domain). If omitted, all clients will be deleted."
+//
+// @Success      200 {object} httpResponse "Client(s) deleted successfully"
+// @Failure      404 {object} httpResponse "Client not found"
+//
+// @Router       /services/{service}/clients [delete]
+//
+// @Example Request:
+// DELETE /services/casb/clients?client=http://127.0.0.1:5556
+// DELETE /services/casb/clients
 func (sh *ServiceHandler) DeleteClients(c *gin.Context) {
 	t := c.Query("client")
 	service := c.Param("service")

@@ -15,3 +15,8 @@ type httpResponse struct {
 	Message string `json:"message"`
 	Status  int    `json:"status"`
 }
+
+type clientGroup []string
+type clientGroupResponse struct {
+	Groups map[string][]string `json:"groups"`
+}

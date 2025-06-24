@@ -80,10 +80,10 @@ func (cu *casbUsecase) BuildDataJson(c context.Context) (data *Data, err error) 
 }
 
 func (cu *casbUsecase) setDefaultEffect(c context.Context, data *Data) error {
-	// [casb.t_policy_saas_config] effect 조회
+	// [casb_policy_saas_config] effect 조회
 	config, err := cu.policySaasConfigRepo.GetConfig(c)
 	if err != nil {
-		return handleErr("fetch t_policy_saas_config", err)
+		return handleErr("fetch casb_policy_saas_config", err)
 	}
 
 	effect, err := strconv.Atoi(config.Effect)
@@ -101,10 +101,10 @@ func (cu *casbUsecase) setDefaultEffect(c context.Context, data *Data) error {
 }
 
 func (cu *casbUsecase) setPolicies(c context.Context, data *Data) error {
-	// [casb.t_policy_saas] rule_id, rule_name, seq, enable 조회
+	// [casb_policy_saas] rule_id, rule_name, seq, enable 조회
 	policies, err := cu.policySaasRepo.ListPolicies(c)
 	if err != nil {
-		return handleErr("get t_policy_saas", err)
+		return handleErr("get casb_policy_saas", err)
 	}
 
 	for _, policy := range policies {
@@ -144,10 +144,10 @@ func (cu *casbUsecase) setSubject(c context.Context, data *Policy, policy policy
 	data.Subject.Users = []string{}
 	data.Subject.Groups = []string{}
 
-	// [casb.t_profile_user_sub] gtype, gcode 조회
+	// [casb_profile_user_sub] gtype, gcode 조회
 	groupAttrs, err := cu.policySaasRepo.ListGroupAttrs(c, policy.RuleID)
 	if err != nil {
-		return handleErr("query t_profile_user_sub", err)
+		return handleErr("query casb_profile_user_sub", err)
 	}
 
 	var groups []string
@@ -159,10 +159,10 @@ func (cu *casbUsecase) setSubject(c context.Context, data *Policy, policy policy
 			groups = append(groups, groupAttr.GCode)
 		}
 	}
-	// [common.t_org_group] gtype이 1(그룹)인 경우 하위부서까지 모두 조회 및 append
+	// [common_org_group] gtype이 1(그룹)인 경우 하위부서까지 모두 조회 및 append
 	gcodes, err := cu.orgGroupRepo.ListGidsRecursive(c, groups)
 	if err != nil {
-		return handleErr("query t_org_group", err)
+		return handleErr("query common_org_group", err)
 	}
 
 	data.Subject.Groups = append(data.Subject.Groups, gcodes...)
@@ -172,16 +172,16 @@ func (cu *casbUsecase) setSubject(c context.Context, data *Policy, policy policy
 func (cu *casbUsecase) setServices(c context.Context, data *Policy, policy policy.TPolicySaas) error {
 	data.Services = []category.CategoryService{}
 
-	// [casb.t_policy_saas_cate_mapping] pid 조회
+	// [casb_policy_saas_cate_mapping] pid 조회
 	pids, err := cu.policySaasRepo.ListCatePids(c, policy.RuleID)
 	if err != nil {
-		return handleErr("query t_policy_saas_cate_mapping", err)
+		return handleErr("query casb_policy_saas_cate_mapping", err)
 	}
 
-	// [common.t_profile_saas_cate_sub, common.t_saas_category] cid, action 조회
+	// [common_profile_saas_cate_sub, common.t_saas_category] cid, action 조회
 	services, err := cu.categoryRepo.ListCategoryServices(c, pids)
 	if err != nil {
-		return handleErr("query t_profile_saas_cate_sub, common.t_saas_category", err)
+		return handleErr("query common_profile_saas_cate_sub, common.t_saas_category", err)
 	}
 
 	data.Services = append(data.Services, services...)

@@ -10,7 +10,7 @@ import (
 )
 
 type TCategorySummary struct {
-	bun.BaseModel `bun:"table:common.t_saas_category"`
+	bun.BaseModel `bun:"table:common_saas_category"`
 
 	CID    uint16         `bun:"cid,pk,autoincrement" json:"cid"`
 	PID    uint16         `bun:"pid,notnull,default:0" json:"pid"`

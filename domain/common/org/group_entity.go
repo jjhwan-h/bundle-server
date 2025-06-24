@@ -8,7 +8,7 @@ import (
 )
 
 type TOrgGroup struct {
-	bun.BaseModel `bun:"table:t_org_group"`
+	bun.BaseModel `bun:"table:common_org_group"`
 
 	GID     string  `bun:"gid,pk"           json:"gid"`
 	GName   string  `bun:"gname,notnull"    json:"gname"`

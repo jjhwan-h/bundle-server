@@ -15,7 +15,7 @@ const (
 )
 
 type TPolicySaas struct {
-	bun.BaseModel `bun:"table:t_policy_saas"`
+	bun.BaseModel `bun:"table:casb_policy_saas"`
 	RuleID        uint       `bun:"rule_id,pk,autoincrement" json:"rule_id"`
 	BID           int16      `bun:"bid,notnull" json:"bid"`
 	RuleName      string     `bun:"rule_name,notnull" json:"rule_name"`

@@ -10,13 +10,12 @@ http:
 
 db:
   database: # init 시 conn생성할 db
-    - "casb_bak"
-    - "common_bak"
+    - "sse"
   repository: # repo별 연결 db
-    policy_repo: "casb_bak"
-    org_repo: "common_bak"
-    profile_repo: "common_bak"
-    category_repo: "casb_bak"
+    policy_repo: "sse"
+    org_repo: "sse"
+    profile_repo: "sse"
+    category_repo: "sse"
   timeout: 3
   read_time_out: 5
   write_time_out: 5
@@ -53,6 +52,6 @@ security:
 clients:
   service:
     casb: 
-      - "127.0.0.1:5556"
+      - "http://127.0.0.1:5556"
     ztna: 
-      - "127.0.0.1:5557"
+      - "http://127.0.0.1:5557"
