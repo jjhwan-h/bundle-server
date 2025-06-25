@@ -49,9 +49,12 @@ security:
     #X-Forwarded-Proto: "https"
 
 # opa-sdk-clients
+# List of OPA client addresses, also used to validate allowed service parameters
 clients:
   service:
     casb: 
       - "http://127.0.0.1:5556"
     ztna: 
       - "http://127.0.0.1:5557"
+    test:
+      - 

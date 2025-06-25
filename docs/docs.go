@@ -48,7 +48,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name (used to determine bundle path)",
+                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -89,7 +89,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name",
+                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -125,7 +125,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name (used to identify the target OPA bundle)",
+                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -182,7 +182,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name",
+                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -212,7 +212,7 @@ const docTemplate = `{
         },
         "/services/{service}/data/trigger": {
             "post": {
-                "description": "Receives a trigger event to regenerate OPA's data.json, regular bundle, and delta bundle.",
+                "description": "Receives a trigger event to regenerate OPA's data.json, regular bundle, and delta bundle. \u003cbr\u003e If changes are detected, notifies OPA SDK client via webhook (POST /hooks/bundle-update?type=delta).",
                 "produces": [
                     "application/json"
                 ],
@@ -223,7 +223,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name (used to determine bundle/data path)",
+                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -267,7 +267,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name (used to determine bundle/data path)",
+                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -298,7 +298,7 @@ const docTemplate = `{
         },
         "/services/{service}/policy/trigger": {
             "post": {
-                "description": "Receives a trigger event to regenerate regular bundle.",
+                "description": "Receives a trigger event to regenerate regular bundle. \u003cbr\u003e If changes are detected, notifies OPA SDK client via webhook (POST /hooks/bundle-update).",
                 "produces": [
                     "application/json"
                 ],
@@ -309,7 +309,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name (used to determine bundle/data path)",
+                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
                         "name": "service",
                         "in": "path",
                         "required": true

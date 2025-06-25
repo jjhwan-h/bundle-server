@@ -1,6 +1,7 @@
 package router
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/jjhwan-h/bundle-server/api/app/handler"
@@ -12,6 +13,7 @@ import (
 	"github.com/jjhwan-h/bundle-server/domain/integration/category"
 	"github.com/jjhwan-h/bundle-server/domain/usecase"
 	"github.com/jjhwan-h/bundle-server/internal/clients"
+	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
 	"github.com/jjhwan-h/bundle-server/pkg/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -35,29 +37,46 @@ func NewServiceRouter(r *gin.Engine, logger *zap.Logger, timeout time.Duration) 
 	serviceRouter := r.Group("/services", middleware.TimeOutMiddleware(timeout))
 	{
 		// POST /services/:service/data/trigger
-		serviceRouter.POST("/:service/data/trigger", sh.BuildDataNBundles)
+		serviceRouter.POST("/:service/data/trigger", checkAllowedService, sh.BuildDataNBundles)
 
 		// POST /services/:service/policy/trigger
-		serviceRouter.POST("/:service/policy/trigger", sh.CreateBundle)
+		serviceRouter.POST("/:service/policy/trigger", checkAllowedService, sh.CreateBundle)
 
 		// POST /services/:serivce/policy
-		serviceRouter.POST("/:service/policy", sh.RegisterPolicy)
+		serviceRouter.POST("/:service/policy", checkAllowedService, sh.RegisterPolicy)
 
 		// GET /services/:service/bundle?type=
-		serviceRouter.GET("/:service/bundle", sh.ServeBundle)
+		serviceRouter.GET("/:service/bundle", checkAllowedService, sh.ServeBundle)
 
 		// POST /services/:service/clients
-		serviceRouter.POST("/:service/clients", sh.RegisterClients)
+		serviceRouter.POST("/:service/clients", checkAllowedService, sh.RegisterClients)
 
 		// GET /services/clients
-		serviceRouter.GET("/clients", sh.ServeClients)
+		serviceRouter.GET("/clients", checkAllowedService, sh.ServeClients)
 
 		// GET /services/:service/clients
-		serviceRouter.GET("/:service/clients", sh.ServeServiceClients)
+		serviceRouter.GET("/:service/clients", checkAllowedService, sh.ServeServiceClients)
 
 		// DELETE /services/:service/clients?client=
-		serviceRouter.DELETE("/:service/clients", sh.DeleteClients)
+		serviceRouter.DELETE("/:service/clients", checkAllowedService, sh.DeleteClients)
 	}
 
 	return nil
+}
+
+func checkAllowedService(c *gin.Context) {
+	service := c.Param("service")
+	for s := range config.Cfg.Clients.Service {
+		if service == s {
+			c.Next()
+			return
+		}
+	}
+	c.Error(appErr.NewHttpError(
+		"bad_request",
+		http.StatusBadRequest,
+		"Invalid service parameter",
+	))
+
+	c.Abort()
 }
