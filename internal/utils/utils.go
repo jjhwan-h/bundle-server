@@ -32,6 +32,32 @@ func SaveToFile(ctx context.Context, reader io.Reader, path string) error {
 		return err
 	}
 
+	tmpPath := path + ".tmp"
+	dst, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+
+	if _, err = io.Copy(dst, reader); err != nil {
+		dst.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	dst.Close()
+
+	return os.Rename(tmpPath, path) // atomic write
+}
+
+func SaveToFileWithLock(ctx context.Context, reader io.Reader, path string) error {
+	if reader == nil {
+		return fmt.Errorf("reader parameter is nil")
+	}
+
+	err := os.MkdirAll(filepath.Dir(path), 0755)
+	if err != nil {
+		return err
+	}
+
 	lockPath := path + ".lock"
 	fileLock := flock.New(lockPath) // 멀티 프로세스/컨테이너 환경에서의 쓰기 충돌 방지
 

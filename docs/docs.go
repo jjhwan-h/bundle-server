@@ -37,7 +37,7 @@ const docTemplate = `{
         },
         "/services/{service}/bundle": {
             "get": {
-                "description": "Serves either a regular or delta bundle file (.tar.gz) for a specific service. Use query parameter ` + "`" + `type=delta` + "`" + ` to get the delta bundle.",
+                "description": "Downloads an OPA bundle file (.tar.gz) for the specified service.\nBy default, the latest **regular** bundle is served.\nTo download a **delta** bundle, use the query ` + "`" + `?type=delta` + "`" + `.\nTo request a specific version of the regular bundle, use the query ` + "`" + `?version=X.Y` + "`" + `.\nSupports ETag validation using the ` + "`" + `If-None-Match` + "`" + ` header.",
                 "produces": [
                     "application/gzip"
                 ],
@@ -48,7 +48,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
+                        "description": "Service name (must be listed in config.clients.service)",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -58,17 +58,41 @@ const docTemplate = `{
                         "description": "Bundle type: 'regular' (default) or 'delta'",
                         "name": "type",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Regular bundle version in format 'X.Y' (e.g., 1.2)",
+                        "name": "version",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Bundle file (application/gzip)",
+                        "description": "The requested bundle file (.tar.gz)",
                         "schema": {
                             "type": "file"
+                        },
+                        "headers": {
+                            "ETag": {
+                                "type": "string",
+                                "description": "ETag header containing current bundle hash"
+                            }
+                        }
+                    },
+                    "304": {
+                        "description": "Not Modified - Client already has the latest bundle",
+                        "schema": {
+                            "$ref": "#/definitions/handler.httpResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid service parameters or file not found",
+                        "schema": {
+                            "$ref": "#/definitions/errors.HttpError"
                         }
                     },
                     "500": {
-                        "description": "Internal server error or file not found",
+                        "description": "Internal server error while serving the bundle",
                         "schema": {
                             "$ref": "#/definitions/errors.HttpError"
                         }
@@ -107,11 +131,17 @@ const docTemplate = `{
                                 }
                             }
                         }
+                    },
+                    "400": {
+                        "description": "Invalid service parameters",
+                        "schema": {
+                            "$ref": "#/definitions/errors.HttpError"
+                        }
                     }
                 }
             },
             "post": {
-                "description": "Registers one or more OPA SDK client addresses for the specified service. Accepts a JSON array of client URLs or IPs.",
+                "description": "Registers one or more OPA SDK client addresses for the specified service.\nAccepts a JSON array of client URLs (e.g., IP or domain).\nThese clients will be notified via webhook when a new bundle is available.",
                 "consumes": [
                     "application/json"
                 ],
@@ -125,7 +155,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
+                        "description": "Service name (must be listed in config.clients.service)",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -151,19 +181,13 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid JSON format",
-                        "schema": {
-                            "$ref": "#/definitions/errors.HttpError"
-                        }
-                    },
-                    "404": {
-                        "description": "No clients found in request",
+                        "description": "Invalid service parameters, JSON format or no clients provided",
                         "schema": {
                             "$ref": "#/definitions/errors.HttpError"
                         }
                     },
                     "409": {
-                        "description": "Conflict - client already exists or internal error",
+                        "description": "Conflict - one or more clients already registered or registration failed",
                         "schema": {
                             "$ref": "#/definitions/errors.HttpError"
                         }
@@ -201,6 +225,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/handler.httpResponse"
                         }
                     },
+                    "400": {
+                        "description": "Invalid service parameters",
+                        "schema": {
+                            "$ref": "#/definitions/errors.HttpError"
+                        }
+                    },
                     "404": {
                         "description": "Client not found",
                         "schema": {
@@ -212,7 +242,10 @@ const docTemplate = `{
         },
         "/services/{service}/data/trigger": {
             "post": {
-                "description": "Receives a trigger event to regenerate OPA's data.json, regular bundle, and delta bundle. \u003cbr\u003e If changes are detected, notifies OPA SDK client via webhook (POST /hooks/bundle-update?type=delta).",
+                "description": "Triggers OPA bundle regeneration.\n1. Builds ` + "`" + `data.json` + "`" + ` for the given service\n2. Compares with previous version to generate ` + "`" + `patch.json` + "`" + `\n3. If changes are found, creates ` + "`" + `delta.tar.gz` + "`" + ` and ` + "`" + `regular-vX.X.tar.gz` + "`" + ` bundles\n4. Sends webhook POST /hooks/bundle-update?type=delta to notify OPA SDK clients",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -223,7 +256,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
+                        "description": "Service name (only services defined in config.clients.service are allowed)",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -231,19 +264,31 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK - no changes detected in data.json",
+                        "description": "OK - No changes detected in data.json (no new bundles created)",
                         "schema": {
                             "$ref": "#/definitions/handler.httpResponse"
                         }
                     },
                     "202": {
-                        "description": "Accepted - data.json and bundle were generated successfully",
+                        "description": "Accepted - Bundles generated and notification will be sent to OPA clients",
                         "schema": {
                             "$ref": "#/definitions/handler.httpResponse"
                         }
                     },
+                    "400": {
+                        "description": "Invalid service parameter",
+                        "schema": {
+                            "$ref": "#/definitions/errors.HttpError"
+                        }
+                    },
                     "500": {
-                        "description": "Internal server error during bundle generation",
+                        "description": "Internal server error during data/bundle generation",
+                        "schema": {
+                            "$ref": "#/definitions/errors.HttpError"
+                        }
+                    },
+                    "501": {
+                        "description": "Service not yet supported",
                         "schema": {
                             "$ref": "#/definitions/errors.HttpError"
                         }
@@ -253,7 +298,7 @@ const docTemplate = `{
         },
         "/services/{service}/policy": {
             "post": {
-                "description": "Uploads a policy.rego file and saves it to the service-specific bundle directory.",
+                "description": "Uploads a ` + "`" + `policy.rego` + "`" + ` file via multipart/form-data and saves it into the service-specific bundle directory.\nOnly services defined in ` + "`" + `clients.service` + "`" + ` of the config file are allowed.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -263,18 +308,18 @@ const docTemplate = `{
                 "tags": [
                     "service"
                 ],
-                "summary": "Register policy.rego",
+                "summary": "Upload a policy.rego file",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
+                        "description": "Service name (must be listed in config.clients.service)",
                         "name": "service",
                         "in": "path",
                         "required": true
                     },
                     {
                         "type": "file",
-                        "description": "The policy.rego file to upload",
+                        "description": "policy.rego file to upload",
                         "name": "file",
                         "in": "formData",
                         "required": true
@@ -282,13 +327,19 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "201": {
-                        "description": "Created - The policy file was saved successfully",
+                        "description": "Created - The policy.rego file was saved successfully",
                         "schema": {
                             "$ref": "#/definitions/handler.httpResponse"
                         }
                     },
+                    "400": {
+                        "description": "Invalid service parameter or malformed request",
+                        "schema": {
+                            "$ref": "#/definitions/errors.HttpError"
+                        }
+                    },
                     "500": {
-                        "description": "Internal server error during file saving",
+                        "description": "Internal server error while saving the policy file",
                         "schema": {
                             "$ref": "#/definitions/errors.HttpError"
                         }
@@ -298,18 +349,21 @@ const docTemplate = `{
         },
         "/services/{service}/policy/trigger": {
             "post": {
-                "description": "Receives a trigger event to regenerate regular bundle. \u003cbr\u003e If changes are detected, notifies OPA SDK client via webhook (POST /hooks/bundle-update).",
+                "description": "Triggers regeneration of the regular bundle (policy.rego and related files).\nIf changes are detected, sends a webhook notification to OPA SDK clients via POST /hooks/bundle-update.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "service"
                 ],
-                "summary": "Trigger policy.rego update and generate OPA bundles",
+                "summary": "Trigger policy.rego update and generate regular OPA bundle",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Service name \u003cbr\u003e Only services listed in clients.service of the config file are allowed.",
+                        "description": "Service name (only services defined in config.clients.service are allowed)",
                         "name": "service",
                         "in": "path",
                         "required": true
@@ -317,13 +371,19 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "202": {
-                        "description": "Accepted - bundle were generated successfully",
+                        "description": "Accepted - Regular bundle was generated and notification will be sent to OPA clients",
                         "schema": {
                             "$ref": "#/definitions/handler.httpResponse"
                         }
                     },
+                    "400": {
+                        "description": "Invalid service parameter",
+                        "schema": {
+                            "$ref": "#/definitions/errors.HttpError"
+                        }
+                    },
                     "500": {
-                        "description": "Internal server error during bundle generation",
+                        "description": "Internal server error during regular bundle generation",
                         "schema": {
                             "$ref": "#/definitions/errors.HttpError"
                         }

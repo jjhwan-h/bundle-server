@@ -9,9 +9,9 @@ import (
 
 	"github.com/jjhwan-h/bundle-server/database"
 	"github.com/jjhwan-h/bundle-server/domain/casb/policy"
-	"github.com/jjhwan-h/bundle-server/domain/common/org"
-	"github.com/jjhwan-h/bundle-server/domain/common/profile"
 	"github.com/jjhwan-h/bundle-server/domain/integration/category"
+	"github.com/jjhwan-h/bundle-server/domain/sse/org"
+	"github.com/jjhwan-h/bundle-server/domain/sse/profile"
 
 	"github.com/spf13/viper"
 )

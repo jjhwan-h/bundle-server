@@ -1,6 +1,12 @@
 package errors
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/gin-gonic/gin"
+	contextkey "github.com/jjhwan-h/bundle-server/api/context"
+	"go.uber.org/zap"
+)
 
 var (
 	ErrEmptyEnvVar           = errors.New("environment variable is empty")
@@ -12,3 +18,13 @@ var (
 	ErrSendEventNotification = errors.New("send event notification failed")
 	ErrAlreadyRegistered     = errors.New("client already registered")
 )
+
+func HandleError(c *gin.Context, logger *zap.Logger, httpErr HttpError, msg string, fields ...zap.Field) {
+	logger.Error(msg, fields...)
+	c.Set(contextkey.LogLevel, zap.ErrorLevel)
+	c.Error(NewHttpError(
+		httpErr.Code,
+		httpErr.Status,
+		httpErr.Err,
+	))
+}

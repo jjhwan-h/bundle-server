@@ -19,7 +19,7 @@ import (
 )
 
 var serveCmd = &cobra.Command{
-	Use:   "serve",
+	Use:   "serve -p <port>",
 	Short: "Start the API server",
 	Run: func(cmd *cobra.Command, args []string) {
 		runServer(cmd)

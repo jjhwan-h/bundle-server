@@ -8,9 +8,9 @@ import (
 	"github.com/jjhwan-h/bundle-server/config"
 	"github.com/jjhwan-h/bundle-server/database"
 	"github.com/jjhwan-h/bundle-server/domain/casb/policy"
-	"github.com/jjhwan-h/bundle-server/domain/common/org"
-	"github.com/jjhwan-h/bundle-server/domain/common/profile"
 	"github.com/jjhwan-h/bundle-server/domain/integration/category"
+	"github.com/jjhwan-h/bundle-server/domain/sse/org"
+	"github.com/jjhwan-h/bundle-server/domain/sse/profile"
 	"github.com/jjhwan-h/bundle-server/domain/usecase"
 	"github.com/jjhwan-h/bundle-server/internal/clients"
 	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
@@ -28,9 +28,10 @@ func NewServiceRouter(r *gin.Engine, logger *zap.Logger, timeout time.Duration) 
 		category.NewCategoryRepo(database.GetDB(config.Cfg.DB.Repository["category_repo"])),
 		policy.NewPolicySaasConfigRepo(database.GetDB(config.Cfg.DB.Repository["policy_repo"])),
 	)
+
 	sh := &handler.ServiceHandler{
 		CasbUsecase: casbUsecase,
-		Client:      clients.NewClient(config.Cfg.Clients.Service),
+		Client:      clients.NewClient(logger, config.Cfg.Clients.Service),
 		Logger:      logger,
 	}
 
@@ -45,14 +46,14 @@ func NewServiceRouter(r *gin.Engine, logger *zap.Logger, timeout time.Duration) 
 		// POST /services/:serivce/policy
 		serviceRouter.POST("/:service/policy", checkAllowedService, sh.RegisterPolicy)
 
-		// GET /services/:service/bundle?type=
+		// GET /services/:service/bundle?type=x&version=x.x
 		serviceRouter.GET("/:service/bundle", checkAllowedService, sh.ServeBundle)
 
 		// POST /services/:service/clients
 		serviceRouter.POST("/:service/clients", checkAllowedService, sh.RegisterClients)
 
 		// GET /services/clients
-		serviceRouter.GET("/clients", checkAllowedService, sh.ServeClients)
+		serviceRouter.GET("/clients", sh.ServeClients)
 
 		// GET /services/:service/clients
 		serviceRouter.GET("/:service/clients", checkAllowedService, sh.ServeServiceClients)

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/jjhwan-h/bundle-server/domain/casb/policy"
-	"github.com/jjhwan-h/bundle-server/domain/common/profile"
+	"github.com/jjhwan-h/bundle-server/domain/sse/profile"
 
 	"github.com/uptrace/bun"
 )

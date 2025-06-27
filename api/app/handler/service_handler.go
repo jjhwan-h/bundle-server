@@ -9,17 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
-	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	contextkey "github.com/jjhwan-h/bundle-server/api/context"
 	"github.com/jjhwan-h/bundle-server/config"
-	"github.com/jjhwan-h/bundle-server/domain/integration/category"
 	"github.com/jjhwan-h/bundle-server/domain/usecase"
 	"github.com/jjhwan-h/bundle-server/internal/clients"
 	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
@@ -42,15 +41,23 @@ type ServiceHandler struct {
 
 // BuildDataNBundles godoc
 // @Summary      Trigger policy DB update and generate OPA bundles
-// @Description  Receives a trigger event to regenerate OPA's data.json, regular bundle, and delta bundle. <br> If changes are detected, notifies OPA SDK client via webhook (POST /hooks/bundle-update?type=delta).
+// @Description  Triggers OPA bundle regeneration.
+// @Description  1. Builds `data.json` for the given service
+// @Description  2. Compares with previous version to generate `patch.json`
+// @Description  3. If changes are found, creates `delta.tar.gz` and `regular-vX.X.tar.gz` bundles
+// @Description  4. Sends webhook POST /hooks/bundle-update?type=delta to notify OPA SDK clients
 //
 // @Tags         service
+// @Accept       json
 // @Produce      json
-// @Param        service path string true "Service name <br> Only services listed in clients.service of the config file are allowed."
+// @Param        service path string true "Service name (only services defined in config.clients.service are allowed)"
 //
-// @Success      202 {object} httpResponse "Accepted - data.json and bundle were generated successfully"
-// @Success      200 {object} httpResponse "OK - no changes detected in data.json"
-// @Failure      500 {object} appErr.HttpError "Internal server error during bundle generation"
+// @Success      202 {object} httpResponse "Accepted - Bundles generated and notification will be sent to OPA clients"
+// @Success      200 {object} httpResponse "OK - No changes detected in data.json (no new bundles created)"
+// @Failure      400 {object} appErr.HttpError "Invalid service parameter"
+// @Failure      500 {object} appErr.HttpError "Internal server error during data/bundle generation"
+// @Failure      501 {object} appErr.HttpError "Service not yet supported"
+//
 // @Router       /services/{service}/data/trigger [post]
 //
 // @Example Request:
@@ -59,7 +66,6 @@ func (sh *ServiceHandler) BuildDataNBundles(c *gin.Context) {
 	service := c.Param("service")
 	dataPath := fmt.Sprintf("%s/%s/regular/data.json", config.Cfg.OpaDataPath, service)
 	patchPath := fmt.Sprintf("%s/%s/delta/patch.json", config.Cfg.OpaDataPath, service)
-
 	var data *usecase.Data
 	var err error
 
@@ -68,100 +74,121 @@ func (sh *ServiceHandler) BuildDataNBundles(c *gin.Context) {
 		// data 빌드
 		data, err = sh.CasbUsecase.BuildDataJson(c)
 		if err != nil {
-			sh.Error("failed to build data.json", zap.Error(err))
-			c.Set(contextkey.LogLevel, zap.ErrorLevel)
-			c.Error(appErr.NewHttpError(
-				"internal_server_error",
-				http.StatusInternalServerError,
-				"failed to build data.json",
-			))
+			appErr.HandleError(c, sh.Logger, appErr.HttpError{
+				Code:   "internal_server_error",
+				Status: http.StatusInternalServerError,
+				Err:    "failed to build data.json",
+			}, "failed to build data.json", zap.String("service", service))
 			return
 		}
 
 	case "ztna":
-		c.Set(contextkey.LogLevel, zap.WarnLevel)
-		c.Error(appErr.NewHttpError(
-			"unsupported_service",
-			http.StatusNotImplemented,
-			"ztna service is not supported yet",
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "unsupported_service",
+			Status: http.StatusNotImplemented,
+			Err:    "ztna service is not supported yet",
+		}, "ztna service is not supported yet", zap.String("service", service))
 		return
 
 	default:
-		sh.Warn("Invalid service parameter", zap.String("service", service))
-		c.Set(contextkey.LogLevel, zap.WarnLevel)
-		c.Error(appErr.NewHttpError(
-			"bad_request",
-			http.StatusBadRequest,
-			"Invalid service parameter",
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "bad_request",
+			Status: http.StatusBadRequest,
+			Err:    "Invalid service parameter",
+		}, "Invalid service parameter", zap.String("service", service))
 		return
 	}
 
+	oldData, err := getDataJson(dataPath)
+	if err != nil {
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "internal_server_error",
+			Status: http.StatusInternalServerError,
+			Err:    err.Error(),
+		}, "failed to Read Data.json", zap.Error(err), zap.String("service", service))
+		return
+	}
+
+	//patch.json 생성
+	patch, err := sh.CasbUsecase.BuildPatchJson(oldData, data)
+	if err != nil {
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "internal_server_error",
+			Status: http.StatusInternalServerError,
+			Err:    err.Error(),
+		}, "failed to build patch.json", zap.Error(err), zap.String("service", service))
+		return
+	}
 	// delta-bundle 생성
 	err = buildDeltaBundle(
 		c,
-		data,
-		dataPath,
+		patch,
 		patchPath,
 		fmt.Sprintf("%s/%s/delta.tar.gz", config.Cfg.OpaDataPath, service),
 	)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			if errors.Is(err, appErr.ErrNoChanges) { // data.json 변경 x
-				sh.Info("patch.json not generated: no changes detected", zap.String("patch", patchPath))
-				c.Set(contextkey.LogLevel, zap.InfoLevel)
-				c.JSON(http.StatusOK,
-					&httpResponse{
-						Code:    "no_changes",
-						Message: err.Error(),
-						Status:  http.StatusOK,
-					})
-				return
-			} else {
-				sh.Error("failed to build delta bundle", zap.Error(err))
-				c.Set(contextkey.LogLevel, zap.ErrorLevel)
-				c.Error(appErr.NewHttpError(
-					"internal_server_error",
-					http.StatusInternalServerError,
-					err.Error(),
-				))
-				return
-			}
-		} else {
+		// data.json 없음: 로깅만 하고 아래로 진행
+		if errors.Is(err, os.ErrNotExist) {
 			sh.Info("No existing data.json found. Skipping delta bundle generation", zap.String("data", dataPath))
+		} else if errors.Is(err, appErr.ErrNoChanges) {
+			// 변경 없음: return with 200
+			sh.Info("patch.json not generated: no changes detected", zap.String("patch", patchPath))
+			c.Set(contextkey.LogLevel, zap.InfoLevel)
+			c.JSON(http.StatusOK, &httpResponse{
+				Code:    "no_changes",
+				Message: err.Error(),
+				Status:  http.StatusOK,
+			})
+			return
+		} else {
+			appErr.HandleError(c, sh.Logger, appErr.HttpError{
+				Code:   "internal_server_error",
+				Status: http.StatusInternalServerError,
+				Err:    err.Error(),
+			}, "failed to build delta-bundle", zap.Error(err), zap.String("service", service))
+			return
 		}
-	} else {
-		sh.Info("Delta Bundle created successfully", zap.String("service", service))
 	}
+	sh.Info("Delta Bundle created successfully", zap.String("service", service))
 
+	nMajor, nMinor := sh.Client.Bundle[service].Latest.NextVersion()
 	// 일반-bundle 생성
 	// opa-sdk-client들 초기 실행 시 변경사항이 반영된 일반-bundle 필요
 	err = buildBundle(
 		c,
 		data,
 		dataPath,
-		fmt.Sprintf("%s/%s/regular.tar.gz", config.Cfg.OpaDataPath, service),
+		fmt.Sprintf("%s/%s/regular-v%d.%d.tar.gz", config.Cfg.OpaDataPath, service, nMajor, nMinor),
 	)
 	if err != nil {
-		sh.Error("failed to build regular bundle", zap.Error(err))
-		c.Set(contextkey.LogLevel, zap.ErrorLevel)
-		c.Error(appErr.NewHttpError(
-			"internal_server_error",
-			http.StatusInternalServerError,
-			err.Error(),
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "internal_server_error",
+			Status: http.StatusInternalServerError,
+			Err:    err.Error(),
+		}, "failed to build regular bundle", zap.Error(err), zap.String("service", service))
 		return
 	} else {
 		sh.Info("Regular Bundle created successfully", zap.String("service", service))
+		sh.Client.Bundle[service].Latest.IncrementVersion()
 	}
 
-	go func() {
-		err := sh.Client.Hook("/hooks/bundle-update?type=delta", service)
+	// Etag update
+	_, err = sh.Client.Bundle[service].ETagFromFile()
+	if err != nil {
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "internal_server_error",
+			Status: http.StatusInternalServerError,
+			Err:    err.Error(),
+		}, "failed to update etag(hash)", zap.Error(err), zap.String("service", service))
+		return
+	}
+
+	go func(major int, minor int8) {
+		err := sh.Client.Hook("hooks/bundle-update?type=delta", service)
 		if err != nil {
 			sh.Error("failed to event notification", zap.Error(err))
 		}
-	}()
+	}(nMajor, nMinor)
 
 	c.JSON(http.StatusAccepted, &httpResponse{
 		Code:    "success",
@@ -171,46 +198,64 @@ func (sh *ServiceHandler) BuildDataNBundles(c *gin.Context) {
 }
 
 // CreateBundle godoc
-// @Summary      Trigger policy.rego update and generate OPA bundles
-// @Description  Receives a trigger event to regenerate regular bundle. <br> If changes are detected, notifies OPA SDK client via webhook (POST /hooks/bundle-update).
+// @Summary      Trigger policy.rego update and generate regular OPA bundle
+// @Description  Triggers regeneration of the regular bundle (policy.rego and related files).
+// @Description  If changes are detected, sends a webhook notification to OPA SDK clients via POST /hooks/bundle-update.
 //
 // @Tags         service
+// @Accept       json
 // @Produce      json
-// @Param        service path string true "Service name <br> Only services listed in clients.service of the config file are allowed."
+// @Param        service path string true "Service name (only services defined in config.clients.service are allowed)"
 //
-// @Success      202 {object} httpResponse "Accepted - bundle were generated successfully"
-// @Failure      500 {object} appErr.HttpError "Internal server error during bundle generation"
+// @Success      202 {object} httpResponse "Accepted - Regular bundle was generated and notification will be sent to OPA clients"
+// @Failure      400 {object} appErr.HttpError "Invalid service parameter"
+// @Failure      500 {object} appErr.HttpError "Internal server error during regular bundle generation"
+//
 // @Router       /services/{service}/policy/trigger [post]
 //
 // @Example Request:
 // POST /services/casb/policy/trigger
 func (sh *ServiceHandler) CreateBundle(c *gin.Context) {
 	service := c.Param("service")
+
+	// IncrementVersion() 호출 전까지 race-condition발생 가능하므로 regular-bundle로 .lock파일 유지
+	nMajor, nMinor := sh.Client.Bundle[service].Latest.NextVersion()
+
 	err := createBundle(
 		c.Request.Context(),
-		fmt.Sprintf("%s/%s/regular.tar.gz", config.Cfg.OpaDataPath, service),
-		fmt.Sprintf("%s/%s/regular", config.Cfg.OpaDataPath, service),
+		fmt.Sprintf("%s/%s/regular-v%d.%d.tar.gz", config.Cfg.OpaDataPath, service, nMajor, nMinor),
+		fmt.Sprintf("%s/%s", config.Cfg.OpaDataPath, service),
 	)
 
 	if err != nil {
-		sh.Error("failed to build regular bundle", zap.Error(err))
-		c.Set(contextkey.LogLevel, zap.ErrorLevel)
-		c.Error(appErr.NewHttpError(
-			"internal_server_error",
-			http.StatusInternalServerError,
-			err.Error(),
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "internal_server_error",
+			Status: http.StatusInternalServerError,
+			Err:    err.Error(),
+		}, "failed to build regular bundle", zap.Error(err), zap.String("service", service))
 		return
 	} else {
 		sh.Info("Regular Bundle created successfully", zap.String("service", service))
+		sh.Client.Bundle[service].Latest.IncrementVersion()
 	}
 
-	go func() {
-		err := sh.Client.Hook("/hooks/bundle-update", service)
+	// Etag update
+	_, err = sh.Client.Bundle[service].ETagFromFile()
+	if err != nil {
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "internal_server_error",
+			Status: http.StatusInternalServerError,
+			Err:    err.Error(),
+		}, "failed to update etag(hash)", zap.Error(err), zap.String("service", service))
+		return
+	}
+
+	go func(major int, minor int8) {
+		err := sh.Client.Hook("hooks/bundle-update", service)
 		if err != nil {
 			sh.Error("failed to event notification", zap.Error(err))
 		}
-	}()
+	}(nMajor, nMinor)
 
 	c.JSON(http.StatusAccepted, &httpResponse{
 		Code:    "success",
@@ -220,17 +265,20 @@ func (sh *ServiceHandler) CreateBundle(c *gin.Context) {
 }
 
 // RegisterPolicy godoc
-// @Summary      Register policy.rego
-// @Description  Uploads a policy.rego file and saves it to the service-specific bundle directory.
+// @Summary      Upload a policy.rego file
+// @Description  Uploads a `policy.rego` file via multipart/form-data and saves it into the service-specific bundle directory.
+// @Description  Only services defined in `clients.service` of the config file are allowed.
+//
 // @Tags         service
 // @Accept       multipart/form-data
 // @Produce      json
 //
-// @Param        service path string true "Service name <br> Only services listed in clients.service of the config file are allowed."
-// @Param        file formData file true "The policy.rego file to upload"
+// @Param        service path string true "Service name (must be listed in config.clients.service)"
+// @Param        file formData file true "policy.rego file to upload"
 //
-// @Success      201 {object} httpResponse "Created - The policy file was saved successfully"
-// @Failure      500 {object} appErr.HttpError "Internal server error during file saving"
+// @Success      201 {object} httpResponse "Created - The policy.rego file was saved successfully"
+// @Failure      400 {object} appErr.HttpError "Invalid service parameter or malformed request"
+// @Failure      500 {object} appErr.HttpError "Internal server error while saving the policy file"
 //
 // @Router       /services/{service}/policy [post]
 //
@@ -244,38 +292,32 @@ func (sh *ServiceHandler) RegisterPolicy(c *gin.Context) {
 
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		sh.Error("failed to parse form file", zap.Error(err))
-		c.Set(contextkey.LogLevel, zap.ErrorLevel)
-		c.Error(appErr.NewHttpError(
-			"internal_server_error",
-			http.StatusInternalServerError,
-			err.Error(),
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "internal_server_error",
+			Status: http.StatusInternalServerError,
+			Err:    err.Error(),
+		}, "failed to parse form file", zap.Error(err), zap.String("service", service))
 		return
 	}
 
 	file, err := fileHeader.Open()
 	if err != nil {
-		sh.Error("failed to open form file", zap.Error(err))
-		c.Set(contextkey.LogLevel, zap.ErrorLevel)
-		c.Error(appErr.NewHttpError(
-			"internal_server_error",
-			http.StatusInternalServerError,
-			err.Error(),
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "internal_server_error",
+			Status: http.StatusInternalServerError,
+			Err:    err.Error(),
+		}, "failed to open form file", zap.Error(err), zap.String("service", service))
 		return
 	}
 	defer file.Close()
 
-	err = utils.SaveToFile(c.Request.Context(), file, policyPath)
+	err = utils.SaveToFileWithLock(c.Request.Context(), file, policyPath)
 	if err != nil {
-		sh.Error("failed to save form file", zap.Error(err))
-		c.Set(contextkey.LogLevel, zap.ErrorLevel)
-		c.Error(appErr.NewHttpError(
-			"internal_server_error",
-			http.StatusInternalServerError,
-			err.Error(),
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "internal_server_error",
+			Status: http.StatusInternalServerError,
+			Err:    err.Error(),
+		}, "failed to save form file", zap.Error(err), zap.String("service", service))
 		return
 	} else {
 		sh.Info("policy.rego created successfully", zap.String("service", service))
@@ -290,80 +332,125 @@ func (sh *ServiceHandler) RegisterPolicy(c *gin.Context) {
 
 // ServeBundle godoc
 // @Summary      Download OPA bundle file
-// @Description  Serves either a regular or delta bundle file (.tar.gz) for a specific service. Use query parameter `type=delta` to get the delta bundle.
+// @Description  Downloads an OPA bundle file (.tar.gz) for the specified service.
+// @Description  By default, the latest **regular** bundle is served.
+// @Description  To download a **delta** bundle, use the query `?type=delta`.
+// @Description  To request a specific version of the regular bundle, use the query `?version=X.Y`.
+// @Description  Supports ETag validation using the `If-None-Match` header.
+//
 // @Tags         service
 // @Produce      application/gzip
 //
-// @Param        service path string true "Service name <br> Only services listed in clients.service of the config file are allowed."
+// @Param        service path string true "Service name (must be listed in config.clients.service)"
 // @Param        type query string false "Bundle type: 'regular' (default) or 'delta'"
+// @Param        version query string false "Regular bundle version in format 'X.Y' (e.g., 1.2)"
 //
-// @Success      200 {file} file "Bundle file (application/gzip)"
-// @Failure      500 {object} appErr.HttpError "Internal server error or file not found"
+// @Success      200 {file} file "The requested bundle file (.tar.gz)"
+// @Success      304 {object} httpResponse "Not Modified - Client already has the latest bundle"
+// @Failure      400 {object} appErr.HttpError "Invalid service parameters or file not found"
+// @Failure      500 {object} appErr.HttpError "Internal server error while serving the bundle"
+//
+// @Header       200 {string} ETag "ETag header containing current bundle hash"
 //
 // @Router       /services/{service}/bundle [get]
 //
 // @Example Request:
 // GET /services/casb/bundle
 // GET /services/casb/bundle?type=delta
+// GET /services/casb/bundle?version=1.3
 func (sh *ServiceHandler) ServeBundle(c *gin.Context) {
 	var path string
 	var filename string
+	var etag string
 
 	service := c.Param("service")
+	version := c.Query("version")
 	t := c.Query("type")
+
+	major := sh.Client.Bundle[service].Latest.GetMajor()
+	minor := sh.Client.Bundle[service].Latest.GetMinor()
 
 	switch t {
 	case "delta":
 		path = fmt.Sprintf("%s/%s/delta.tar.gz", config.Cfg.OpaDataPath, service)
 		filename = fmt.Sprintf("%s_delta.tar.gz", service)
-	case "", "regular":
-		path = fmt.Sprintf("%s/%s/regular.tar.gz", config.Cfg.OpaDataPath, service)
-		filename = fmt.Sprintf("%s_regular.tar.gz", service)
+	case "", "regular": // type이 비어있거나 regular인 경우 => regular-bundle 리턴
+
+		// If-Non-Match 헤더와 비교
+		etag = sh.Client.Bundle[service].GetEtag()
+		clientEtag := c.GetHeader("If-None-Match")
+
+		sh.Debug("etag", zap.String("etag", etag), zap.String("clientEtag", clientEtag))
+		if etag == clientEtag {
+			c.Set(contextkey.LogLevel, zap.InfoLevel)
+			c.JSON(http.StatusNotModified, &httpResponse{
+				Code:    "not_modified",
+				Message: "To request the latest bundle, please omit the version query parameter.",
+				Status:  http.StatusNotModified,
+			})
+			return
+		}
+
+		s := strings.Split(version, ".")
+
+		// version이 비어있는경우 또는 latest 를 요청하는 경우
+		if version == "" ||
+			(s[0] == strconv.Itoa(major) && s[1] == strconv.Itoa(int(minor))) {
+			path = fmt.Sprintf("%s/%s/regular-v%d.%d.tar.gz", config.Cfg.OpaDataPath, service, major, minor)
+			filename = fmt.Sprintf("%s_regular-v%d.%d.tar.gz", service, major, minor)
+			c.Header("ETag", etag) // 최신번들 요청일 경우에만 삽입
+		} else {
+			path = fmt.Sprintf("%s/%s/regular-v%s.%s.tar.gz", config.Cfg.OpaDataPath, service, s[0], s[1])
+			filename = fmt.Sprintf("%s_regular-v%s.%s.tar.gz", service, s[0], s[1])
+		}
 	default:
 		sh.Info("Invalid bundle type, defaulting to regular bundle",
 			zap.String("requested_type", t),
 			zap.String("service", service),
 		)
-		path = fmt.Sprintf("%s/%s/regular.tar.gz", config.Cfg.OpaDataPath, service)
-		filename = fmt.Sprintf("%s_regular.tar.gz", service)
+		path = fmt.Sprintf("%s/%s/regular-v%d.%d.tar.gz", config.Cfg.OpaDataPath, service, major, minor)
+		filename = fmt.Sprintf("%s_regular-v%d.%d.tar.gz", service, major, minor)
 	}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		sh.Error("bundle file not found", zap.Error(err))
-		c.Set(contextkey.LogLevel, zap.ErrorLevel)
-		c.Error(appErr.NewHttpError(
-			"internal_server_error",
-			http.StatusInternalServerError,
-			err.Error(),
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "bad_request",
+			Status: http.StatusBadRequest,
+			Err:    err.Error(),
+		}, "bundle file not found", zap.Error(err), zap.String("service", service))
 		return
 	}
 
-	c.Header("Content-Type", "application/gzip")
+	sh.Info("serve bundle", zap.String("name", filename))
+
+	mime := mime.TypeByExtension(filepath.Ext(filename))
+	c.Header("Content-Type", mime)
 	c.Header("Content-Disposition", fmt.Sprintf("attachment;filename=%s", filename))
 	http.ServeFile(c.Writer, c.Request, path)
 }
 
 // RegisterClients godoc
 // @Summary      Register OPA webhook client addresses
-// @Description  Registers one or more OPA SDK client addresses for the specified service. Accepts a JSON array of client URLs or IPs.
+// @Description  Registers one or more OPA SDK client addresses for the specified service.
+// @Description  Accepts a JSON array of client URLs (e.g., IP or domain).
+// @Description  These clients will be notified via webhook when a new bundle is available.
+//
 // @Tags         service
 // @Accept       json
 // @Produce      json
 //
-// @Param        service path string true "Service name <br> Only services listed in clients.service of the config file are allowed."
+// @Param        service path string true "Service name (must be listed in config.clients.service)"
 // @Param        clients body []string true "List of OPA client addresses (IP or domain)"
 //
 // @Success      200 {object} httpResponse "Clients registered successfully"
-// @Failure      400 {object} appErr.HttpError "Invalid JSON format"
-// @Failure      404 {object} appErr.HttpError "No clients found in request"
-// @Failure      409 {object} appErr.HttpError "Conflict - client already exists or internal error"
+// @Failure      400 {object} appErr.HttpError "Invalid service parameters, JSON format or no clients provided"
+// @Failure      409 {object} appErr.HttpError "Conflict - one or more clients already registered or registration failed"
 //
 // @Router       /services/{service}/clients [post]
 //
 // @Example Request:
 // POST /services/casb/clients
-// Body:
+// Content-Type: application/json
 // [
 //
 //	"http://127.0.0.1:5556",
@@ -377,34 +464,29 @@ func (sh *ServiceHandler) RegisterClients(c *gin.Context) {
 
 	err := c.ShouldBindJSON(&clients)
 	if err != nil {
-		sh.Error("Invalid reqeust body. Please check the JSON format")
-		c.Set(contextkey.LogLevel, zap.ErrorLevel)
-		c.Error(appErr.NewHttpError(
-			"bad_request",
-			http.StatusBadRequest,
-			err.Error(),
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "bad_request",
+			Status: http.StatusBadRequest,
+			Err:    err.Error(),
+		}, "Invalid reqeust body. Please check the JSON format", zap.Error(err), zap.String("service", service))
 		return
 	}
 
 	if len(clients) == 0 {
-		msg := "no clients found"
-		sh.Error(msg)
-		c.Set(contextkey.LogLevel, zap.ErrorLevel)
-		c.Error(appErr.NewHttpError(
-			"no_data",
-			http.StatusNotFound,
-			msg,
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "bad_request",
+			Status: http.StatusBadRequest,
+			Err:    "no clients found",
+		}, "no clients found", zap.String("service", service))
 		return
 	}
 
 	if err = sh.Client.AddHookClient(clients, service); err != nil {
-		c.Error(appErr.NewHttpError(
-			"confilct",
-			http.StatusConflict,
-			err.Error(),
-		))
+		appErr.HandleError(c, sh.Logger, appErr.HttpError{
+			Code:   "conflict",
+			Status: http.StatusConflict,
+			Err:    err.Error(),
+		}, "client already exists", zap.Error(err), zap.String("service", service))
 		return
 	}
 
@@ -443,6 +525,8 @@ func (sh *ServiceHandler) ServeClients(c *gin.Context) {
 // @Param        service path string true "Service name <br> Only services listed in clients.service of the config file are allowed."
 // @Success      200 {array} clientGroup "List of registered clients"
 //
+// @Failure      400 {object} appErr.HttpError "Invalid service parameters"
+//
 // @Router       /services/{service}/clients [get]
 //
 // @Example Request:
@@ -464,6 +548,7 @@ func (sh *ServiceHandler) ServeServiceClients(c *gin.Context) {
 // @Param        client query string false "Client address (IP or domain). If omitted, all clients will be deleted."
 //
 // @Success      200 {object} httpResponse "Client(s) deleted successfully"
+// @Failure      400 {object} appErr.HttpError "Invalid service parameters"
 // @Failure      404 {object} httpResponse "Client not found"
 //
 // @Router       /services/{service}/clients [delete]
@@ -478,13 +563,11 @@ func (sh *ServiceHandler) DeleteClients(c *gin.Context) {
 	if t != "" {
 		err := sh.Client.Delete(service, t)
 		if err != nil {
-			sh.Error("client not found", zap.String("service", service), zap.String("ip", t))
-			c.Set(contextkey.LogLevel, zap.ErrorLevel)
-			c.Error(appErr.NewHttpError(
-				"client_not_found",
-				http.StatusNotFound,
-				"failed to delete client.",
-			))
+			appErr.HandleError(c, sh.Logger, appErr.HttpError{
+				Code:   "not_found",
+				Status: http.StatusNotFound,
+				Err:    err.Error(),
+			}, "client not found", zap.Error(err), zap.String("service", service), zap.String("ip", t))
 			return
 		}
 		sh.Info("client deleted successfully", zap.String("servcie", service), zap.String("ip", t))
@@ -506,29 +589,15 @@ func (sh *ServiceHandler) DeleteClients(c *gin.Context) {
 	}
 }
 
-func buildDeltaBundle(ctx context.Context, data *usecase.Data, dataPath, patchPath, tarGzPath string) error {
-	byteOldData, err := os.ReadFile(dataPath)
-	if err != nil {
-		return fmt.Errorf("%s: %w", "failed to read data.json", err)
-	}
+func buildDeltaBundle(ctx context.Context, patch *usecase.Patch, patchPath, tarGzPath string) error {
 
-	var oldData usecase.Data
-	if err := json.Unmarshal(byteOldData, &oldData); err != nil {
-		return fmt.Errorf("%s: %w", "failed to unmarshal data to map", err)
-	}
-
-	//patch.json 생성
-	patch, err := buildPatchJson(&oldData, data)
-	if err != nil {
-		return fmt.Errorf("patch.json not generated: %w", err)
-	}
 	buf := new(bytes.Buffer)
-	err = utils.EncodeJson(buf, patch)
+	err := utils.EncodeJson(buf, patch)
 	if err != nil {
 		return fmt.Errorf("%s: %w", appErr.ErrEncodeData.Error(), err)
 	}
 
-	if err := utils.SaveToFile(ctx, buf, patchPath); err != nil {
+	if err := utils.SaveToFileWithLock(ctx, buf, patchPath); err != nil {
 		return fmt.Errorf("%s: %w", appErr.ErrSaveData.Error(), err)
 	}
 
@@ -554,7 +623,7 @@ func buildBundle(ctx context.Context, data *usecase.Data, dataPath, tarGzPath st
 	}
 
 	//data.json 저장
-	if err := utils.SaveToFile(ctx, buf, dataPath); err != nil {
+	if err := utils.SaveToFileWithLock(ctx, buf, dataPath); err != nil {
 		return fmt.Errorf("%s: %w", appErr.ErrSaveData.Error(), err)
 	}
 
@@ -644,85 +713,16 @@ func createBundle(ctx context.Context, tarGzPath, sourceDir string) error {
 	return os.Rename(tmpPath, tarGzPath)
 }
 
-func buildPatchJson(oldData *usecase.Data, data *usecase.Data) (*patch, error) {
-	patchData := getChanges(oldData, data)
-	if len(patchData) == 0 {
-		return nil, appErr.ErrNoChanges
-	}
-	return &patch{
-		Data: patchData,
-	}, nil
-}
-
-func getChanges(oldData *usecase.Data, data *usecase.Data) (changes []patchData) {
-	// default_effect
-	if oldData.DefaultEffect != data.DefaultEffect {
-		changes = append(changes, patchData{
-			Op:    "replace",
-			Path:  "/default_effect",
-			Value: data.DefaultEffect,
-		})
-	}
-	// policies
-	for _, newPolicy := range data.Policies {
-		isExist := false
-		for idx, oldPolicy := range oldData.Policies {
-			if newPolicy.PolicyID == oldPolicy.PolicyID {
-				isExist = true
-				changes = append(changes, comparePolicies(oldPolicy, newPolicy, idx)...)
-				break
-			}
-		}
-		if !isExist {
-			changes = append(changes, patchData{"upsert", "/policies", newPolicy})
-		}
+func getDataJson(dataPath string) (*usecase.Data, error) {
+	byteOldData, err := os.ReadFile(dataPath)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", "failed to read data.json", err)
 	}
 
-	for idx, oldPolicy := range oldData.Policies {
-		isExist := false
-		for _, newPolicy := range data.Policies {
-			if oldPolicy.PolicyID == newPolicy.PolicyID {
-				isExist = true
-				break
-			}
-		}
-		if !isExist {
-			changes = append(changes, patchData{"remove", fmt.Sprintf("/policies/%d", idx), nil})
-		}
-	}
-	return
-}
-
-func comparePolicies(oldPolicy, newPolicy usecase.Policy, idx int) (changes []patchData) {
-	prefix := fmt.Sprintf("/policies/%d", idx)
-
-	if newPolicy.PolicyID != oldPolicy.PolicyID {
-		changes = append(changes, patchData{"replace", prefix + "/id", newPolicy.PolicyID})
-	}
-	if newPolicy.Priority != oldPolicy.Priority {
-		changes = append(changes, patchData{"replace", prefix + "/priority", newPolicy.Priority})
-	}
-	if newPolicy.PolicyName != oldPolicy.PolicyName {
-		changes = append(changes, patchData{"replace", prefix + "/name", newPolicy.PolicyName})
-	}
-	if newPolicy.Effect != oldPolicy.Effect {
-		changes = append(changes, patchData{"replace", prefix + "/effect", newPolicy.Effect})
-	}
-	if !slices.Equal(newPolicy.Subject.Users, oldPolicy.Subject.Users) {
-		changes = append(changes, patchData{"replace", prefix + "/subject/users", newPolicy.Subject.Users})
-	}
-	if !slices.Equal(newPolicy.Subject.Groups, oldPolicy.Subject.Groups) {
-		changes = append(changes, patchData{"replace", prefix + "/subject/groups", newPolicy.Subject.Groups})
+	var oldData usecase.Data
+	if err := json.Unmarshal(byteOldData, &oldData); err != nil {
+		return nil, fmt.Errorf("%s: %w", "failed to unmarshal data to map", err)
 	}
 
-	if !equalService(newPolicy.Services, oldPolicy.Services) {
-		changes = append(changes, patchData{"replace", prefix + "/services", newPolicy.Services})
-	}
-
-	return
-}
-
-// 내부 객체 값은 동일하지만 객체 순서가 바뀐 경우에도 다른 것으로 처리됨.
-func equalService(a, b []category.CategoryService) bool {
-	return reflect.DeepEqual(a, b)
+	return &oldData, nil
 }

@@ -25,7 +25,7 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 			zap.Duration("duration", duration),
 			zap.String("ip", c.ClientIP()),
 			zap.String("user-agent", c.Request.UserAgent()),
-			zap.String("errors", c.Errors.ByType(gin.ErrorTypePrivate).String()),
+			//zap.String("errors", c.Errors.ByType(gin.ErrorTypePrivate).String()),
 		}
 
 		if strings.HasPrefix(path, "/swagger/") {

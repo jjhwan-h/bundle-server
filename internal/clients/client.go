@@ -6,17 +6,22 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jjhwan-h/bundle-server/config"
+	"github.com/jjhwan-h/bundle-server/internal/bundle"
 	appErr "github.com/jjhwan-h/bundle-server/internal/errors"
+	"go.uber.org/zap"
 )
 
 type Client struct { // 이벤트발생 시 알림보낼 client
-	data map[string][]string
-	mu   sync.Mutex
+	data   map[string][]string
+	Bundle map[string]*bundle.Bundle
+	mu     sync.Mutex
 }
 
-func NewClient(clients map[string][]string) *Client {
+func NewClient(logger *zap.Logger, clients map[string][]string) *Client {
 	Client := &Client{
-		data: make(map[string][]string),
+		data:   make(map[string][]string),
+		Bundle: make(map[string]*bundle.Bundle),
 	}
 
 	Client.mu.Lock()
@@ -25,6 +30,32 @@ func NewClient(clients map[string][]string) *Client {
 	if len(clients) > 0 {
 		Client.data = clients
 	}
+
+	for k := range clients {
+		Client.Bundle[k] = bundle.NewBundle(
+			fmt.Sprintf("%s/%s", config.Cfg.OpaDataPath, k),
+		)
+
+		minor := Client.Bundle[k].Latest.Minor
+		major := Client.Bundle[k].Latest.Major
+		if minor == 0 && major == 0 {
+			logger.Info("bundle version is starting from v0.1", zap.String("service", k))
+		} else {
+			etag, err := Client.Bundle[k].ETagFromFile()
+			if err != nil {
+				logger.Error("failed to hash latest bundle", zap.String("version", fmt.Sprintf("v%d.%d", major, minor)), zap.Error(err))
+				return nil
+			}
+
+			logger.Info("latest bundle", zap.String("version", fmt.Sprintf("v%d.%d", major, minor)))
+			logger.Info("successfully hashed latest bundle",
+				zap.String("version", fmt.Sprintf("v%d.%d", major, minor)),
+				zap.String("etag", etag[:8]+"..."), // 해시 결과도 함께 기록
+			)
+
+		}
+	}
+
 	return Client
 }
 
@@ -107,10 +138,21 @@ func (b *Client) Hook(path string, service string) error {
 	clients := b.Get(service)
 
 	for _, addr := range clients {
-		_, errHTTPPost := http.Post(fmt.Sprintf("%s/%s", addr, path), "application/json", nil)
-		if errHTTPPost != nil {
-			failedTargets = append(failedTargets, addr)
+		p := fmt.Sprintf("%s/%s", addr, path)
+
+		req, err := http.NewRequest("POST", p, nil)
+		if err != nil {
+			failedTargets = append(failedTargets, p)
+			continue
 		}
+
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode >= 400 {
+			failedTargets = append(failedTargets, p)
+			continue
+		}
+		defer resp.Body.Close()
 	}
 
 	if len(failedTargets) != 0 {
